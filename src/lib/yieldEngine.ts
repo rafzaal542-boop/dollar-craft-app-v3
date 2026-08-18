@@ -79,19 +79,14 @@ export function calculateServerTimestampYield(
   }
   const elapsedSeconds = Math.max(0, currSec - startSec);
 
-  const grossYield = yieldPerSec.multipliedBy(elapsedSeconds);
-  const withdrawnBN = new BigNumber(totalWithdrawn || 0);
-  
-  // Continuous accumulated profit = (ElapsedSeconds * YieldPerSec) - TotalWithdrawn
-  const accumulatedProfit = BigNumber.max(0, grossYield.minus(withdrawnBN));
-
-  // DisplayBalance = InitialDeposit + AccumulatedProfit
+  const incrementalYield = yieldPerSec.multipliedBy(elapsedSeconds);
+  const accumulatedProfit = BigNumber.max(0, baseBN.plus(incrementalYield));
   const displayBalance = BigNumber.max(0, depositBN.plus(accumulatedProfit));
 
   return {
     accumulatedProfit,
-    accruedYield: grossYield,
-    grossYield,
+    accruedYield: accumulatedProfit,
+    grossYield: accumulatedProfit,
     netYield: accumulatedProfit,
     displayBalance,
     elapsedSeconds,
@@ -440,7 +435,9 @@ export function reconcileUserOfflineYield(
   // Determine depositStartTime & baseEarnedYield (immutable earliest anchor)
   const nowSec = Math.floor(now / 1000);
   const depositStartSec = resolveCanonicalDepositStartTime(user, inv);
-  let baseYieldStr = user.baseEarnedYield || '0.000000000000000000';
+  let baseYieldStr = (user.baseEarnedYield && user.baseEarnedYield !== '0.000000000000000000') 
+    ? user.baseEarnedYield 
+    : (savedAccumulatedProfitStr || '0.000000000000000000');
 
   const monthlyRate = inv.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
   const yieldRes = calculateServerTimestampYield(

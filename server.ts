@@ -340,7 +340,8 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
   });
   const canonicalDepStartSec = startCandidates.length > 0 ? Math.min(...startCandidates) : nowSecForConsolidation;
   canonicalUser.depositStartTime = canonicalDepStartSec;
-  canonicalUser.baseEarnedYield = '0.000000000000000000';
+  const baseYieldBN = BigNumber.max(new BigNumber(canonicalUser.baseEarnedYield || '0'), maxEarnedBN);
+  canonicalUser.baseEarnedYield = baseYieldBN.toFixed(18);
 
   if (effectivePrincipal.isLessThanOrEqualTo(0)) {
     canonicalUser.principalBalance = '0.000000000000000000';
@@ -356,13 +357,13 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
     const monthlyRate = canonPBalNum >= 1001 ? 35 : (canonPBalNum >= 501 ? 30 : 25);
     const ratePerSec = effectivePrincipal.multipliedBy(new BigNumber(monthlyRate).dividedBy(30).dividedBy(100).dividedBy(86400));
     const elapsed = Math.max(0, nowSecForConsolidation - canonicalDepStartSec);
-    const grossAccrued = ratePerSec.multipliedBy(elapsed);
-    const netYieldBN = BigNumber.max(0, grossAccrued.minus(effectiveWithdrawnBN));
+    const incrementalAccrued = ratePerSec.multipliedBy(elapsed);
+    const totalYieldBN = baseYieldBN.plus(incrementalAccrued);
 
-    canonicalUser.earnedYield = netYieldBN.toFixed(18);
-    canonicalUser.dailyProfit = netYieldBN.toNumber();
+    canonicalUser.earnedYield = totalYieldBN.toFixed(18);
+    canonicalUser.dailyProfit = totalYieldBN.toNumber();
     (canonicalUser as any).totalDeposit = canonPBalNum;
-    (canonicalUser as any).totalBalance = Math.max(0, canonPBalNum + netYieldBN.toNumber());
+    (canonicalUser as any).totalBalance = Math.max(0, canonPBalNum + totalYieldBN.toNumber());
   }
 
   canonicalUser.ibWithdrawableCommission = maxIbBN.toFixed(2);
@@ -557,27 +558,26 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
       if (userDocData.depositStartTime && Number(userDocData.depositStartTime) > 0) {
         canonicalUser.depositStartTime = Number(userDocData.depositStartTime);
       }
-      canonicalUser.baseEarnedYield = '0.000000000000000000';
+      const docBase = userDocData.baseEarnedYield !== undefined ? new BigNumber(userDocData.baseEarnedYield) : new BigNumber(0);
+      const inMemBase = new BigNumber(canonicalUser.baseEarnedYield || '0');
+      const baseYieldBN = BigNumber.max(docBase, inMemBase, docYield, inMemYield, inMemProfit);
+      canonicalUser.baseEarnedYield = baseYieldBN.toFixed(18);
 
       const docDep = userDocData.totalDeposit !== undefined ? Number(userDocData.totalDeposit) : Number(canonicalUser.principalBalance);
       const totalDepNum = Math.max(Number((canonicalUser as any).totalDeposit || 0), docDep, Number(canonicalUser.principalBalance));
-
-      const docYield = userDocData.earnedYield !== undefined ? new BigNumber(userDocData.earnedYield) : (userDocData.dailyProfit !== undefined ? new BigNumber(userDocData.dailyProfit) : new BigNumber(0));
-      const inMemYield = new BigNumber(canonicalUser.earnedYield || 0);
-      const inMemProfit = new BigNumber(canonicalUser.dailyProfit || 0);
 
       const nowSec = Math.floor(Date.now() / 1000);
       const depStartSec = canonicalUser.depositStartTime && Number(canonicalUser.depositStartTime) > 0 ? Number(canonicalUser.depositStartTime) : nowSec;
       const monthlyRate = totalDepNum >= 1001 ? 35 : (totalDepNum >= 501 ? 30 : 25);
       const ratePerSec = new BigNumber(totalDepNum).multipliedBy(new BigNumber(monthlyRate).dividedBy(30).dividedBy(100).dividedBy(86400));
       const elapsed = Math.max(0, nowSec - depStartSec);
-      const grossYield = ratePerSec.multipliedBy(elapsed);
-      const netYieldBN = BigNumber.max(0, grossYield.minus(maxWithdrawnBN));
+      const incrementalYield = ratePerSec.multipliedBy(elapsed);
+      const totalYieldBN = baseYieldBN.plus(incrementalYield);
 
-      canonicalUser.earnedYield = netYieldBN.toFixed(18);
-      canonicalUser.dailyProfit = netYieldBN.toNumber();
+      canonicalUser.earnedYield = totalYieldBN.toFixed(18);
+      canonicalUser.dailyProfit = totalYieldBN.toNumber();
       (canonicalUser as any).totalDeposit = totalDepNum;
-      (canonicalUser as any).totalBalance = Math.max(0, totalDepNum + netYieldBN.toNumber());
+      (canonicalUser as any).totalBalance = Math.max(0, totalDepNum + totalYieldBN.toNumber());
 
       if (userDocData.activeInvestment) {
         canonicalUser.activeInvestment = userDocData.activeInvestment;

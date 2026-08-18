@@ -113,6 +113,38 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     setTimeout(() => setCopiedAll(false), 2000);
   };
 
+  const handleOpenDepositEmail = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const officialSupportEmail = 'dollarcraft3@gmail.com';
+    const emailSubject = `Bank Deposit Slip - $${amount} USD to IBAN ${ibanNumber}`;
+    const rawMessage = `Hello Dollar Craft Support,\n\nI have transferred $${amount} USD to IBAN ${ibanNumber}.\n\nPlease find attached my payment deposit slip.\n\nThank you!`;
+
+    try {
+      navigator.clipboard.writeText(officialSupportEmail);
+    } catch (_) {}
+
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const gmailWebUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(officialSupportEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
+    const mailtoUrl = `mailto:${officialSupportEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
+
+    if (isMobile) {
+      window.location.href = mailtoUrl;
+    } else {
+      window.open(gmailWebUrl, '_blank', 'noopener,noreferrer');
+      try {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = mailtoUrl;
+        document.body.appendChild(iframe);
+        setTimeout(() => {
+          if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe);
+          }
+        }, 2000);
+      } catch (_) {}
+    }
+  };
+
   const validateAndProcessDeposit = async (txIdToValidate?: string) => {
     setErrorMsg(null);
     if (selectedMethod === 'PAYPAL') {
@@ -745,13 +777,14 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                   Payment deposit slip Dollar Craft ke official 24/7 Email Support (<span className="text-cyan-300 font-mono font-bold">dollarcraft3@gmail.com</span>) par send karein.
                 </p>
 
-                <a
-                  href={`mailto:dollarcraft3@gmail.com?subject=${encodeURIComponent(`Bank Deposit Slip - $${amount} USD to IBAN ${ibanNumber}`)}&body=${encodeURIComponent(`Hello Dollar Craft Support,\n\nI have transferred $${amount} USD to IBAN ${ibanNumber}.\n\nPlease find attached my payment deposit slip.\n\nThank you!`)}`}
+                <button
+                  type="button"
+                  onClick={handleOpenDepositEmail}
                   className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-600 hover:from-cyan-500 hover:to-teal-500 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-lg shadow-cyan-950/60 transition-all cursor-pointer border border-cyan-400/50 hover:scale-[1.01]"
                 >
                   <EmailLogo className="w-4 h-4 shrink-0" />
                   <span>Send Slip via 24/7 Live Email</span>
-                </a>
+                </button>
               </div>
 
               {errorMsg && (

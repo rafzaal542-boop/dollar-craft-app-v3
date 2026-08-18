@@ -203,7 +203,39 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
     `Please process my withdrawal request. Thank you!`;
 
   const emailSubject = `Withdrawal Request Slip - Ref: ${refCode} ($${finalAmount} USD)`;
-  const emailSupportUrl = `mailto:dollarcraft3@gmail.com?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
+  const officialSupportEmail = 'dollarcraft3@gmail.com';
+
+  const handleOpenEmail = (e: React.MouseEvent) => {
+    e.preventDefault();
+    
+    // Copy recipient email to clipboard automatically for ease of access
+    try {
+      navigator.clipboard.writeText(officialSupportEmail);
+      setIsCaptured(true);
+      setTimeout(() => setIsCaptured(false), 3000);
+    } catch (_) {}
+
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const gmailWebUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(officialSupportEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
+    const mailtoUrl = `mailto:${officialSupportEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
+
+    if (isMobile) {
+      window.location.href = mailtoUrl;
+    } else {
+      window.open(gmailWebUrl, '_blank', 'noopener,noreferrer');
+      try {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = mailtoUrl;
+        document.body.appendChild(iframe);
+        setTimeout(() => {
+          if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe);
+          }
+        }, 2000);
+      } catch (_) {}
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto overflow-x-hidden bg-black/80 backdrop-blur-sm p-2 sm:p-4 w-full max-w-full">
@@ -316,13 +348,14 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
               {/* Action Buttons: Share on 24/7 Live Email */}
               <div className="space-y-2.5 pt-1">
                 {/* Direct Share on 24/7 Live Email Button */}
-                <a
-                  href={emailSupportUrl}
+                <button
+                  type="button"
+                  onClick={handleOpenEmail}
                   className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-500 hover:from-cyan-500 hover:to-teal-400 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-xl shadow-cyan-950/80 transition-all cursor-pointer border border-cyan-400/50 hover:scale-[1.02] active:scale-[0.99]"
                 >
                   <EmailLogo className="w-4 h-4 shrink-0" />
                   <span>Send Slip to 24/7 Live Email</span>
-                </a>
+                </button>
 
                 {/* Close Button */}
                 <button

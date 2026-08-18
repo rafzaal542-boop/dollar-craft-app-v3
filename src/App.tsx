@@ -216,8 +216,15 @@ export default function App() {
         );
 
         const yieldPerSec = yieldRes.yieldPerSecond;
-        // Deterministic continuous time-based yield calculation at nowSec
-        let newEarnedBN = yieldRes.accumulatedProfit;
+        const prevEarnedBN = new BigNumber(prevUser.earnedYield || '0');
+        const prevProfitBN = new BigNumber(prevUser.dailyProfit || '0');
+        const baselineBN = BigNumber.max(prevEarnedBN, prevProfitBN);
+
+        // Strict monotonic sequential progression: each second ticks forward by exact yieldPerSec minimum without jumping down or resetting
+        let newEarnedBN = BigNumber.max(
+          yieldRes.accumulatedProfit,
+          baselineBN.plus(yieldPerSec)
+        );
 
         // Monotonic sequence: yield ticks up incrementally second by second
         const newEarnedStr = newEarnedBN.toFixed(18);
@@ -348,11 +355,8 @@ export default function App() {
             const fsWithdrawn = d.totalWithdrawn !== undefined ? String(d.totalWithdrawn) : (prevUser.totalWithdrawn || '0');
             const isZeroWd = parseFloat(fsWithdrawn) === 0;
 
-            let effectiveDepositStart = fsDepositStart || prevUser.depositStartTime || parsedCreatedSec || nowSec;
-            if (isZeroWd && parsedCreatedSec > 0) {
-              effectiveDepositStart = parsedCreatedSec;
-              fsBaseYield = '0.000000000000000000';
-            } else if (effectiveDepositStart > nowSec) {
+            let effectiveDepositStart = prevUser.depositStartTime || fsDepositStart || parsedCreatedSec || nowSec;
+            if (effectiveDepositStart > nowSec) {
               effectiveDepositStart = nowSec;
             }
 
@@ -375,8 +379,12 @@ export default function App() {
               fsWithdrawn
             );
 
-            const fsYieldBN = yieldRes.accumulatedProfit;
-            const finalYieldBN = fsYieldBN;
+            const prevEarnedBN = new BigNumber(prevUser.earnedYield || '0');
+            const docEarnedBN = new BigNumber(d.earnedYield !== undefined ? d.earnedYield : (d.dailyProfit || '0'));
+            const calculatedProfitBN = yieldRes.accumulatedProfit;
+            
+            // Strictly monotonic merge: never allow yield to decrease below what the user already accumulated
+            const finalYieldBN = BigNumber.max(prevEarnedBN, docEarnedBN, calculatedProfitBN);
             const fsYieldStr = finalYieldBN.toFixed(18);
 
             const computedTotalBal = d.totalBalance !== undefined && Number(d.totalBalance) > 0
@@ -752,17 +760,11 @@ export default function App() {
               if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
             }
 
-            const isZeroWithdrawn = parseFloat(String(data.user.totalWithdrawn || '0')) === 0 && parseFloat(String(prevUser.totalWithdrawn || '0')) === 0;
+            let effDepositStart = (data.user.depositStartTime && data.user.depositStartTime > 0 && data.user.depositStartTime <= nowSec)
+              ? data.user.depositStartTime
+              : (prevUser.depositStartTime && prevUser.depositStartTime > 0 && prevUser.depositStartTime <= nowSec ? prevUser.depositStartTime : (parsedCreatedSec || nowSec));
 
-            let effDepositStart = prevUser.depositStartTime && prevUser.depositStartTime > 0 && prevUser.depositStartTime <= nowSec
-              ? prevUser.depositStartTime
-              : (data.user.depositStartTime && data.user.depositStartTime > 0 && data.user.depositStartTime <= nowSec ? data.user.depositStartTime : (parsedCreatedSec || nowSec));
-
-            if (isZeroWithdrawn && parsedCreatedSec > 0) {
-              effDepositStart = parsedCreatedSec;
-            }
-
-            const effBaseYield = isZeroWithdrawn ? '0.000000000000000000' : (prevUser.baseEarnedYield || data.user.baseEarnedYield || '0.000000000000000000');
+            const effBaseYield = data.user.baseEarnedYield || prevUser.baseEarnedYield || '0.000000000000000000';
 
             const mergedUser: User = {
               ...prevUser,

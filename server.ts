@@ -228,6 +228,7 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
   if (!cleanEmail && !reqId) return null;
 
   let maxPrincipalBN = new BigNumber(0);
+  let maxEarnedBN = new BigNumber(0);
   let maxWithdrawnBN = new BigNumber(0);
   let maxIbBN = new BigNumber(0);
   let maxIbTotalBN = new BigNumber(0);
@@ -248,6 +249,7 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
   matching.forEach((u) => {
     if (!u) return;
     maxPrincipalBN = BigNumber.max(maxPrincipalBN, new BigNumber(u.principalBalance || '0'));
+    maxEarnedBN = BigNumber.max(maxEarnedBN, new BigNumber(u.earnedYield || '0'), new BigNumber(u.dailyProfit || '0'));
     maxWithdrawnBN = BigNumber.max(maxWithdrawnBN, new BigNumber(u.totalWithdrawn || '0'));
     maxIbBN = BigNumber.max(maxIbBN, new BigNumber(u.ibWithdrawableCommission || '0'));
     maxIbTotalBN = BigNumber.max(maxIbTotalBN, new BigNumber(u.ibTotalCommission || '0'));
@@ -325,8 +327,12 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
 
     if (userDeps.length > 0) {
       const netYieldBN = BigNumber.max(0, totalDepYieldBN.minus(maxWithdrawnBN));
-      canonicalUser.earnedYield = netYieldBN.toFixed(18);
-      canonicalUser.dailyProfit = netYieldBN.toNumber();
+      const finalEarnedBN = BigNumber.max(maxEarnedBN, netYieldBN);
+      canonicalUser.earnedYield = finalEarnedBN.toFixed(18);
+      canonicalUser.dailyProfit = finalEarnedBN.toNumber();
+    } else if (maxEarnedBN.gt(0)) {
+      canonicalUser.earnedYield = maxEarnedBN.toFixed(18);
+      canonicalUser.dailyProfit = maxEarnedBN.toNumber();
     }
 
     const canonPBalNum = effectivePrincipal.toNumber();
@@ -620,6 +626,10 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
         totalDeposit: totalDepNum,
         totalBalance: totalBalNum,
         earnedYield: earnedNum,
+        dailyProfit: Number(canonicalUser.dailyProfit || earnedNum),
+        depositStartTime: canonicalUser.depositStartTime || Math.floor(Date.now() / 1000),
+        baseEarnedYield: canonicalUser.baseEarnedYield || '0.000000000000000000',
+        totalWithdrawn: Number(canonicalUser.totalWithdrawn || 0),
         ibWithdrawableCommission: Number(canonicalUser.ibWithdrawableCommission || 0),
         ibTotalCommission: Number(canonicalUser.ibTotalCommission || 0),
         is_ib: !!canonicalUser.is_ib,
@@ -1993,10 +2003,20 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
           tier: foundDoc.tier || 'SILVER',
           principalBalance: String(foundDoc.principalBalance ?? '0.00'),
           earnedYield: String(foundDoc.earnedYield ?? '0.00'),
+          dailyProfit: Number(foundDoc.dailyProfit || foundDoc.earnedYield || 0),
+          totalDeposit: Number(foundDoc.totalDeposit ?? foundDoc.principalBalance ?? 0),
+          totalBalance: Number(foundDoc.totalBalance ?? 0),
+          depositStartTime: foundDoc.depositStartTime || 0,
+          baseEarnedYield: String(foundDoc.baseEarnedYield ?? '0.000000000000000000'),
           totalWithdrawn: String(foundDoc.totalWithdrawn ?? '0.00'),
+          activeInvestment: foundDoc.activeInvestment || null,
           walletAddress: foundDoc.walletAddress || `0x${Math.random().toString(16).substring(2, 10)}`,
           referralCode: foundDoc.referralCode || generateUniqueReferralCode('DC'),
           referredBy: foundDoc.referredBy || foundDoc.referredByCode || undefined,
+          ibWithdrawableCommission: String(foundDoc.ibWithdrawableCommission ?? '0'),
+          ibTotalCommission: String(foundDoc.ibTotalCommission ?? '0'),
+          is_ib: !!foundDoc.is_ib,
+          ibStatus: foundDoc.ibStatus || 'NONE',
           isFrozen: !!foundDoc.isFrozen,
           createdAt: foundDoc.createdAt || new Date().toISOString()
         };

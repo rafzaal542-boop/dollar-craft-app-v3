@@ -370,16 +370,11 @@ export default function App() {
               monthlyRate,
               effectiveDepositStart,
               nowSec,
-              fsBaseYield,
+              0,
               fsWithdrawn
             );
 
-            const prevEarnedBN = new BigNumber(prevUser.earnedYield || '0');
-            const docEarnedBN = new BigNumber(d.earnedYield !== undefined ? d.earnedYield : (d.dailyProfit || '0'));
-            const calculatedProfitBN = yieldRes.accumulatedProfit;
-            
-            // Strictly monotonic merge: never allow yield to decrease below what the user already accumulated
-            const finalYieldBN = BigNumber.max(prevEarnedBN, docEarnedBN, calculatedProfitBN);
+            const finalYieldBN = yieldRes.accumulatedProfit;
             const fsYieldStr = finalYieldBN.toFixed(18);
 
             const computedTotalBal = d.totalBalance !== undefined && Number(d.totalBalance) > 0
@@ -739,14 +734,11 @@ export default function App() {
             }
 
             const incomingBalBN = new BigNumber(data.user.principalBalance || '0');
-            const incomingYieldBN = new BigNumber(data.user.earnedYield !== undefined ? data.user.earnedYield : '0');
-            const prevYieldBN = new BigNumber(prevUser.earnedYield || '0');
-            const finalYieldBN = BigNumber.max(prevYieldBN, incomingYieldBN);
+            const incomingWithdrawnBN = new BigNumber(data.user.totalWithdrawn || '0');
+            const prevWithdrawnBN = new BigNumber(prevUser.totalWithdrawn || '0');
+            const maxWithdrawnBN = BigNumber.max(incomingWithdrawnBN, prevWithdrawnBN);
 
             const totalDepNum = Math.max(0, Number(data.user.totalDeposit || incomingBalBN.toNumber()));
-            const totalBalNum = data.user.totalBalance !== undefined && Number(data.user.totalBalance) > 0
-              ? Number(data.user.totalBalance)
-              : Math.max(0, totalDepNum + finalYieldBN.toNumber());
 
             const effDepositStart = resolveCanonicalDepositStartTime(
               { ...prevUser, ...data.user },
@@ -754,17 +746,31 @@ export default function App() {
               data.deposits || deposits
             );
 
-            const effBaseYield = data.user.baseEarnedYield || prevUser.baseEarnedYield || '0.000000000000000000';
+            const monthlyRate = (data.user.activeInvestment?.monthlyYieldPercent) || (totalDepNum >= 1001 ? 35 : (totalDepNum >= 501 ? 30 : 25));
+            const yieldRes = calculateServerTimestampYield(
+              totalDepNum,
+              monthlyRate,
+              effDepositStart,
+              nowSec,
+              0,
+              maxWithdrawnBN
+            );
+
+            const finalYieldBN = yieldRes.accumulatedProfit;
+            const finalYieldStr = finalYieldBN.toFixed(18);
+            const totalBalNum = Math.max(0, totalDepNum + finalYieldBN.toNumber());
 
             const mergedUser: User = {
               ...prevUser,
               ...data.user,
               principalBalance: incomingBalBN.toFixed(18),
-              earnedYield: finalYieldBN.toFixed(18),
+              earnedYield: finalYieldStr,
+              dailyProfit: finalYieldBN.toNumber(),
+              totalWithdrawn: maxWithdrawnBN.toFixed(18),
               totalDeposit: totalDepNum,
               totalBalance: totalBalNum,
               depositStartTime: effDepositStart,
-              baseEarnedYield: effBaseYield
+              baseEarnedYield: '0.000000000000000000'
             };
 
             localStorage.setItem('dollarcraft_active_user', JSON.stringify(mergedUser));

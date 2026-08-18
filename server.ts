@@ -358,12 +358,11 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
     const elapsed = Math.max(0, nowSecForConsolidation - canonicalDepStartSec);
     const grossAccrued = ratePerSec.multipliedBy(elapsed);
     const netYieldBN = BigNumber.max(0, grossAccrued.minus(effectiveWithdrawnBN));
-    const finalEarnedBN = BigNumber.max(maxEarnedBN, netYieldBN);
 
-    canonicalUser.earnedYield = finalEarnedBN.toFixed(18);
-    canonicalUser.dailyProfit = finalEarnedBN.toNumber();
+    canonicalUser.earnedYield = netYieldBN.toFixed(18);
+    canonicalUser.dailyProfit = netYieldBN.toNumber();
     (canonicalUser as any).totalDeposit = canonPBalNum;
-    (canonicalUser as any).totalBalance = Math.max(0, canonPBalNum + finalEarnedBN.toNumber());
+    (canonicalUser as any).totalBalance = Math.max(0, canonPBalNum + netYieldBN.toNumber());
   }
 
   canonicalUser.ibWithdrawableCommission = maxIbBN.toFixed(2);
@@ -575,12 +574,10 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
       const grossYield = ratePerSec.multipliedBy(elapsed);
       const netYieldBN = BigNumber.max(0, grossYield.minus(maxWithdrawnBN));
 
-      const mergedYieldBN = BigNumber.max(docYield, inMemYield, inMemProfit, netYieldBN);
-
-      canonicalUser.earnedYield = mergedYieldBN.toFixed(18);
-      canonicalUser.dailyProfit = mergedYieldBN.toNumber();
+      canonicalUser.earnedYield = netYieldBN.toFixed(18);
+      canonicalUser.dailyProfit = netYieldBN.toNumber();
       (canonicalUser as any).totalDeposit = totalDepNum;
-      (canonicalUser as any).totalBalance = Math.max(0, totalDepNum + mergedYieldBN.toNumber());
+      (canonicalUser as any).totalBalance = Math.max(0, totalDepNum + netYieldBN.toNumber());
 
       if (userDocData.activeInvestment) {
         canonicalUser.activeInvestment = userDocData.activeInvestment;
@@ -1276,14 +1273,11 @@ function reconcileOfflineYields(): { totalOfflineYieldCredited: string; elapsedS
       const accrued = ratePerSec.multipliedBy(elapsed);
       
       const currentYieldBN = BigNumber.max(0, accrued.minus(totalWithdrawnBN));
-      const prevEarnedBN = new BigNumber(user.earnedYield || '0');
-      const prevProfitBN = new BigNumber(user.dailyProfit || '0');
-      const finalYieldBN = BigNumber.max(currentYieldBN, prevEarnedBN, prevProfitBN);
-      const netYieldStr = finalYieldBN.toFixed(18);
+      const netYieldStr = currentYieldBN.toFixed(18);
 
       user.earnedYield = netYieldStr;
-      user.dailyProfit = finalYieldBN.toNumber();
-      (user as any).totalBalance = Math.max(0, totalDepNum + finalYieldBN.toNumber());
+      user.dailyProfit = currentYieldBN.toNumber();
+      (user as any).totalBalance = Math.max(0, totalDepNum + currentYieldBN.toNumber());
       user.depositStartTime = depStartSec;
       user.baseEarnedYield = '0.000000000000000000';
     }
@@ -3792,10 +3786,7 @@ app.post('/api/withdrawal/request', async (req: Request, res: Response) => {
     const pBalNum = Number(activeUser.principalBalance || 0);
     const newTotBal = Math.max(0, pBalNum + newYieldBN.toNumber());
     activeUser.totalBalance = newTotBal;
-
-    const nowSec = Math.floor(Date.now() / 1000);
-    activeUser.baseEarnedYield = newYieldStr;
-    activeUser.depositStartTime = nowSec;
+    activeUser.baseEarnedYield = '0.000000000000000000';
 
     // Sync across all mockUsers entries matching email or id
     const userEmailClean = (activeUser.email || '').toLowerCase().trim();
@@ -3805,8 +3796,7 @@ app.post('/api/withdrawal/request', async (req: Request, res: Response) => {
         u.dailyProfit = newYieldBN.toNumber();
         u.totalWithdrawn = activeUser.totalWithdrawn;
         u.totalBalance = newTotBal;
-        u.baseEarnedYield = newYieldStr;
-        u.depositStartTime = nowSec;
+        u.baseEarnedYield = '0.000000000000000000';
       }
     });
 

@@ -452,9 +452,7 @@ export function reconcileUserOfflineYield(
     user.totalWithdrawn || '0'
   );
 
-  const prevEarnedBN = new BigNumber(user.earnedYield || '0');
-  const prevProfitBN = new BigNumber(user.dailyProfit || '0');
-  const newEarnedBN = BigNumber.max(yieldRes.accumulatedProfit, prevEarnedBN, prevProfitBN);
+  const newEarnedBN = yieldRes.accumulatedProfit;
 
   const updatedInv: ActiveInvestment = {
     ...inv,

@@ -214,21 +214,9 @@ export default function App() {
         );
 
         const yieldPerSec = yieldRes.yieldPerSecond;
-        const prevEarnedBN = new BigNumber(prevUser.earnedYield || '0');
-        const prevProfitBN = new BigNumber(prevUser.dailyProfit || '0');
-        const baselineBN = BigNumber.max(prevEarnedBN, prevProfitBN);
+        const newEarnedBN = yieldRes.accumulatedProfit;
 
-        // Strict monotonic sequential progression: each second ticks forward continuously by exact yieldPerSec without jumping or erratic leaps
-        let newEarnedBN: BigNumber;
-        if (baselineBN.isGreaterThan(0)) {
-          newEarnedBN = baselineBN.plus(yieldPerSec);
-        } else if (yieldRes.accumulatedProfit.isGreaterThan(0)) {
-          newEarnedBN = yieldRes.accumulatedProfit;
-        } else {
-          newEarnedBN = yieldPerSec;
-        }
-
-        // Monotonic sequence: yield ticks up incrementally second by second
+        // Monotonic sequence: yield ticks up incrementally second by second based on server timestamp formula
         const newEarnedStr = newEarnedBN.toFixed(18);
         const newTotalBal = Math.max(
           totalDep + newEarnedBN.toNumber(),
@@ -374,17 +362,10 @@ export default function App() {
               fsWithdrawn
             );
 
-            const docYieldBN = new BigNumber(d.earnedYield !== undefined ? d.earnedYield : (d.dailyProfit || '0'));
-            const prevEarnedBN = new BigNumber(prevUser.earnedYield || '0');
-            const prevProfitBN = new BigNumber(prevUser.dailyProfit || '0');
-            const calculatedProfitBN = yieldRes.accumulatedProfit;
-
-            const finalYieldBN = BigNumber.max(docYieldBN, prevEarnedBN, prevProfitBN, calculatedProfitBN);
+            const finalYieldBN = yieldRes.accumulatedProfit;
             const fsYieldStr = finalYieldBN.toFixed(18);
 
-            const computedTotalBal = d.totalBalance !== undefined && Number(d.totalBalance) > 0
-              ? Number(d.totalBalance)
-              : Math.max(0, effectiveDepNum + finalYieldBN.toNumber());
+            const computedTotalBal = Math.max(0, effectiveDepNum + finalYieldBN.toNumber());
 
             let updatedInv = prevUser.activeInvestment;
             if (effectiveBalNum <= 0) {
@@ -761,12 +742,7 @@ export default function App() {
               maxWithdrawnBN
             );
 
-            const serverYieldBN = new BigNumber(data.user.earnedYield !== undefined ? data.user.earnedYield : (data.user.dailyProfit || '0'));
-            const prevYieldBN = new BigNumber(prevUser.earnedYield || '0');
-            const prevProfitBN = new BigNumber(prevUser.dailyProfit || '0');
-            const calculatedProfitBN = yieldRes.accumulatedProfit;
-
-            const finalYieldBN = BigNumber.max(serverYieldBN, prevYieldBN, prevProfitBN, calculatedProfitBN);
+            const finalYieldBN = yieldRes.accumulatedProfit;
             const finalYieldStr = finalYieldBN.toFixed(18);
             const totalBalNum = Math.max(0, totalDepNum + finalYieldBN.toNumber());
 
@@ -1043,15 +1019,14 @@ export default function App() {
     const totalDepNum = parseFloat(String(user.totalDeposit || user.principalBalance || '0')) || 0;
     const newTotBal = Math.max(0, totalDepNum + newYieldBN.toNumber());
 
-    const nowSec = Math.floor(Date.now() / 1000);
     const updatedUser: User = {
       ...user,
       earnedYield: newYieldStr,
       dailyProfit: newDailyProfit,
       totalWithdrawn: newWithdrawnStr,
       totalBalance: newTotBal,
-      baseEarnedYield: newYieldStr,
-      depositStartTime: nowSec
+      baseEarnedYield: '0.000000000000000000',
+      depositStartTime: user.depositStartTime || Math.floor(Date.now() / 1000)
     };
 
     // 1. Update React user state immediately (INSTANT UI RE-RENDER)

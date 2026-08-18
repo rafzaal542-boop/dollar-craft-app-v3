@@ -1,0 +1,6 @@
+{
+  "name": "Dollar Craft",
+  "description": "Dollar Craft delivers automated daily continuous micro-yield returns, flexible investment packages (DC1, DC2, DC3), and fast local & crypto withdrawals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

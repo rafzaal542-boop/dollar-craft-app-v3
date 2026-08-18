@@ -1,0 +1,2210 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { User, Transaction, SystemMetrics, InvestmentPlan, IBApplication, IBMembershipPayment, UserDeposit } from '../types';
+import { isClientFirestoreQuotaExceeded } from '../lib/firebase';
+import { BigNumber, formatCurrency, formatPrecision, calculateServerTimestampYield } from '../lib/yieldEngine';
+import { 
+  X, 
+  ShieldCheck, 
+  AlertTriangle, 
+  Check, 
+  Ban, 
+  RefreshCw, 
+  Sliders, 
+  Users, 
+  DollarSign, 
+  Database, 
+  Activity,
+  Lock,
+  Search,
+  Eye,
+  EyeOff,
+  Building2,
+  Phone,
+  Globe,
+  MessageSquare,
+  Briefcase,
+  ArrowRightLeft,
+  Send,
+  CreditCard,
+  Copy,
+  Clock,
+  KeyRound,
+  UserPlus
+} from 'lucide-react';
+import { InternalTransferPanel } from './InternalTransferPanel';
+
+interface AdminPanelProps {
+  isOpen: boolean;
+  onClose: () => void;
+  metrics: SystemMetrics;
+  users: User[];
+  transactions: Transaction[];
+  plans: InvestmentPlan[];
+  onApproveWithdrawal: (txId: string) => void;
+  onRejectWithdrawal: (txId: string, reason: string) => void;
+  onFreezeUser: (userId: string, reason: string) => void;
+  onUnfreezeUser: (userId: string) => void;
+  onUpdatePlanRate: (planId: string, newRate: number) => void;
+  currentUser?: User | null;
+  onRefreshData?: () => void;
+}
+
+export const AdminPanel: React.FC<AdminPanelProps> = ({
+  isOpen,
+  onClose,
+  metrics,
+  users,
+  transactions,
+  plans,
+  onApproveWithdrawal,
+  onRejectWithdrawal,
+  onFreezeUser,
+  onUnfreezeUser,
+  onUpdatePlanRate,
+  currentUser,
+  onRefreshData
+}) => {
+  const ADMIN_MASTER_PASSWORD = 'gdbcbfjnxh@craft@007';
+
+  const [adminTab, setAdminTab] = useState<'METRICS' | 'DEPOSITS' | 'WITHDRAWALS' | 'USERS' | 'PLANS' | 'IB_MANAGEMENT' | 'IB_APPLICATIONS' | 'INTERNAL_TRANSFER'>('DEPOSITS');
+  const [userSearch, setUserSearch] = useState<string>('');
+  const [depositFilter, setDepositFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('PENDING');
+  const [ibAppFilter, setIbAppFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [ibAppSearch, setIbAppSearch] = useState<string>('');
+  const [selectedUserForFreeze, setSelectedUserForFreeze] = useState<User | null>(null);
+  const [preSelectedUserForTransfer, setPreSelectedUserForTransfer] = useState<User | null>(null);
+  const [freezeReason, setFreezeReason] = useState<string>('Irregular Yield Velocity Detected');
+  const [ibApplications, setIbApplications] = useState<IBApplication[]>([]);
+  const [ibPayments, setIbPayments] = useState<IBMembershipPayment[]>([]);
+  const [deposits, setDeposits] = useState<UserDeposit[]>([]);
+  const [adminUsers, setAdminUsers] = useState<User[]>(() => {
+    return Array.isArray(users) && users.length > 0 ? users : [];
+  });
+
+  const deduplicateIbApplicationsList = (list: IBApplication[]): IBApplication[] => {
+    const map = new Map<string, IBApplication>();
+
+    const processIbApp = (app: IBApplication) => {
+      if (!app) return;
+      const cleanId = (app.id || '').trim();
+      const cleanEmail = (app.userEmail || '').toLowerCase().trim();
+      const primaryKey = cleanId || cleanEmail;
+      if (!primaryKey) return;
+
+      let existingKey = Array.from(map.keys()).find(
+        (k) =>
+          k === primaryKey ||
+          (cleanId && k === cleanId) ||
+          (cleanEmail && (k === cleanEmail || map.get(k)?.userEmail?.toLowerCase().trim() === cleanEmail))
+      );
+
+      if (existingKey) {
+        const existing = map.get(existingKey)!;
+        map.set(existingKey, {
+          ...existing,
+          ...app,
+          userName: app.userName || existing.userName,
+          userEmail: app.userEmail || existing.userEmail,
+          status: app.status || existing.status || 'PENDING'
+        });
+      } else {
+        map.set(primaryKey, app);
+      }
+    };
+
+    const ibKeys = ['dollar_craft_ib_applications', 'dollarcraft_ib_applications', 'dc_ib_applications'];
+    ibKeys.forEach((key) => {
+      try {
+        const rawLocal = localStorage.getItem(key);
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) parsed.forEach(processIbApp);
+        }
+      } catch (e) {}
+    });
+
+    if (Array.isArray(list)) {
+      list.forEach(processIbApp);
+    }
+
+    const result = Array.from(map.values());
+    result.sort((a, b) => new Date(b.createdAt || Date.now()).getTime() - new Date(a.createdAt || Date.now()).getTime());
+    return result;
+  };
+
+  const deduplicateUsersList = (usersList: User[]): User[] => {
+    const map = new Map<string, User>();
+
+    const processUser = (u: User) => {
+      if (!u) return;
+      const cleanEmail = (u.email || '').toLowerCase().trim();
+      const cleanId = (u.id || '').trim();
+      const primaryKey = cleanEmail || cleanId;
+      if (!primaryKey) return;
+
+      if (primaryKey === 'dollarcraft3@gmail.com' || cleanEmail === 'dollarcraft3@gmail.com') {
+        u.role = 'ADMIN';
+        u.password = 'gdbcbfjnxh@craft@007';
+      }
+
+      let existingKey = Array.from(map.keys()).find(
+        (k) =>
+          k === primaryKey ||
+          (cleanEmail && (k === cleanEmail || map.get(k)?.email?.toLowerCase().trim() === cleanEmail)) ||
+          (cleanId && (k === cleanId || map.get(k)?.id?.trim() === cleanId))
+      );
+
+      if (existingKey) {
+        const existing = map.get(existingKey)!;
+        const existingWithdrawnBN = new BigNumber(existing.totalWithdrawn || '0');
+        const uWithdrawnBN = new BigNumber(u.totalWithdrawn || '0');
+        const maxWithdrawnBN = BigNumber.max(existingWithdrawnBN, uWithdrawnBN);
+
+        const totalDep = Math.max(
+          Number(existing.totalDeposit || 0),
+          Number(u.totalDeposit || 0),
+          Number(existing.principalBalance || 0),
+          Number(u.principalBalance || 0)
+        );
+
+        let parsedCreatedSec = 0;
+        const createdVal = existing.createdAt || u.createdAt || existing.joinedDate || u.joinedDate;
+        if (createdVal) {
+          const t = new Date(createdVal).getTime();
+          if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
+        }
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        let depStart = existing.depositStartTime || u.depositStartTime;
+        if (maxWithdrawnBN.isZero() && parsedCreatedSec > 0) {
+          if (!depStart || depStart <= 0 || depStart > nowSec || depStart > parsedCreatedSec + 3600) {
+            depStart = parsedCreatedSec;
+          }
+        } else if (!depStart || depStart <= 0 || depStart > nowSec) {
+          depStart = parsedCreatedSec || nowSec;
+        }
+
+        let baseEarnedYield = maxWithdrawnBN.isZero() ? '0.000000000000000000' : (existing.baseEarnedYield || u.baseEarnedYield || '0.000000000000000000');
+        let finalEarnedYieldStr = u.earnedYield || existing.earnedYield || '0.000000000000000000';
+
+        if (totalDep > 0) {
+          const monthlyRate = (existing.activeInvestment?.monthlyYieldPercent) || (u.activeInvestment?.monthlyYieldPercent) || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+          const yieldRes = calculateServerTimestampYield(
+            totalDep,
+            monthlyRate,
+            depStart,
+            nowSec,
+            baseEarnedYield,
+            maxWithdrawnBN
+          );
+          finalEarnedYieldStr = yieldRes.accumulatedProfit.toFixed(18);
+        }
+
+        map.set(existingKey, {
+          ...existing,
+          ...u,
+          createdAt: existing.createdAt || u.createdAt || createdVal,
+          joinedDate: existing.joinedDate || u.joinedDate,
+          email: u.email ? u.email.toLowerCase().trim() : existing.email,
+          role: (cleanEmail === 'dollarcraft3@gmail.com' || primaryKey === 'dollarcraft3@gmail.com') ? 'ADMIN' : (u.role || existing.role || 'USER (SILVER)'),
+          password: (cleanEmail === 'dollarcraft3@gmail.com' || primaryKey === 'dollarcraft3@gmail.com') ? 'gdbcbfjnxh@craft@007' : (u.password || existing.password),
+          principalBalance: BigNumber.max(new BigNumber(existing.principalBalance || '0'), new BigNumber(u.principalBalance || '0')).toFixed(18),
+          totalWithdrawn: maxWithdrawnBN.toFixed(18),
+          depositStartTime: depStart,
+          baseEarnedYield,
+          earnedYield: finalEarnedYieldStr,
+          accumulatedProfit: finalEarnedYieldStr,
+          dailyProfit: new BigNumber(finalEarnedYieldStr).toNumber(),
+          totalDeposit: totalDep,
+          totalBalance: Math.max(0, totalDep + Number(finalEarnedYieldStr)),
+          status: u.status || existing.status || (u.isFrozen || existing.isFrozen ? 'FROZEN' : 'ACTIVE')
+        });
+      } else {
+        const totalDep = Math.max(Number(u.totalDeposit || 0), Number(u.principalBalance || 0));
+        let parsedCreatedSec = 0;
+        const createdVal = u.createdAt || u.joinedDate;
+        if (createdVal) {
+          const t = new Date(createdVal).getTime();
+          if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
+        }
+        const nowSec = Math.floor(Date.now() / 1000);
+        const depStart = u.depositStartTime && u.depositStartTime > 0 && u.depositStartTime <= nowSec ? u.depositStartTime : (parsedCreatedSec || nowSec);
+        let finalEarnedYieldStr = u.earnedYield || '0.000000000000000000';
+        if (totalDep > 0) {
+          const monthlyRate = (u.activeInvestment?.monthlyYieldPercent) || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+          const yieldRes = calculateServerTimestampYield(
+            totalDep,
+            monthlyRate,
+            depStart,
+            nowSec,
+            u.baseEarnedYield || '0',
+            u.totalWithdrawn || '0'
+          );
+          finalEarnedYieldStr = yieldRes.accumulatedProfit.toFixed(18);
+        }
+
+        map.set(primaryKey, {
+          ...u,
+          depositStartTime: depStart,
+          earnedYield: finalEarnedYieldStr,
+          accumulatedProfit: finalEarnedYieldStr,
+          dailyProfit: new BigNumber(finalEarnedYieldStr).toNumber(),
+          totalDeposit: totalDep,
+          totalBalance: Math.max(0, totalDep + Number(finalEarnedYieldStr)),
+          email: u.email ? u.email.toLowerCase().trim() : primaryKey,
+          role: (cleanEmail === 'dollarcraft3@gmail.com' || primaryKey === 'dollarcraft3@gmail.com') ? 'ADMIN' : (u.role || 'USER (SILVER)'),
+          password: (cleanEmail === 'dollarcraft3@gmail.com' || primaryKey === 'dollarcraft3@gmail.com') ? 'gdbcbfjnxh@craft@007' : u.password
+        });
+      }
+    };
+
+    const userKeys = ['dollar_craft_users', 'dollarcraft_users', 'dollar_craft_registered_users', 'dc_registered_users', 'registered_users'];
+    userKeys.forEach((key) => {
+      try {
+        const rawLocal = localStorage.getItem(key);
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) parsed.forEach(processUser);
+        }
+      } catch (e) {}
+    });
+
+    if (Array.isArray(usersList)) {
+      usersList.forEach(processUser);
+    }
+
+    const result = Array.from(map.values());
+    result.sort((a, b) => {
+      const getMs = (usr: any) => {
+        let raw = usr.createdAt || usr.created_at || usr.joinedDate;
+        if (!raw) return 0;
+        if (typeof raw === 'object' && raw !== null && 'seconds' in raw) return raw.seconds * 1000;
+        if (typeof raw === 'object' && raw !== null && typeof raw.toDate === 'function') return raw.toDate().getTime();
+        const t = new Date(raw).getTime();
+        return isNaN(t) ? 0 : t;
+      };
+      return getMs(b) - getMs(a);
+    });
+    return result;
+  };
+
+  const deduplicateDeposits = (list: UserDeposit[]): UserDeposit[] => {
+    const map = new Map<string, UserDeposit>();
+
+    const depKeys = ['dollar_craft_deposits', 'dollarcraft_deposits', 'dc_deposits'];
+    depKeys.forEach((key) => {
+      try {
+        const rawLocal = localStorage.getItem(key);
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((d: any) => {
+              if (d) {
+                const mapKey = d.id || `${d.userEmail}_${d.startTime || d.createdAt}_${d.principalAmount || d.amount}`;
+                if (mapKey) map.set(mapKey, d);
+              }
+            });
+          }
+        }
+      } catch (e) {}
+    });
+
+    if (Array.isArray(list)) {
+      list.forEach((d: any) => {
+        if (!d) return;
+        const key = d.id || `${d.userEmail}_${d.startTime || d.createdAt}_${d.principalAmount || d.amount}`;
+        if (key) {
+          const existing = map.get(key);
+          map.set(key, existing ? { ...existing, ...d } : d);
+        }
+      });
+    }
+
+    return Array.from(map.values()).sort((a: any, b: any) => new Date(b.startTime || b.createdAt || 0).getTime() - new Date(a.startTime || a.createdAt || 0).getTime());
+  };
+
+  const deduplicateTransactions = (list: Transaction[]): Transaction[] => {
+    const map = new Map<string, Transaction>();
+
+    const processTx = (t: Transaction) => {
+      if (!t) return;
+      const cleanId = (t.id || '').trim();
+      const compositeKey = `${(t.userId || t.userEmail || '').toLowerCase().trim()}_${t.createdAt}_${t.amount}`;
+      const primaryKey = cleanId || compositeKey;
+      if (!primaryKey) return;
+
+      let existingKey = Array.from(map.keys()).find(
+        (k) => k === primaryKey || (cleanId && k === cleanId)
+      );
+
+      if (existingKey) {
+        const existing = map.get(existingKey)!;
+        map.set(existingKey, {
+          ...existing,
+          ...t,
+          status: t.status || existing.status || 'PENDING'
+        });
+      } else {
+        map.set(primaryKey, t);
+      }
+    };
+
+    const txKeys = ['dollar_craft_transactions', 'dc_transactions', 'dollar_craft_withdrawals', 'dollarcraft_withdrawals', 'dollarcraft_transactions'];
+    txKeys.forEach((key) => {
+      try {
+        const rawLocal = localStorage.getItem(key);
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) parsed.forEach(processTx);
+        }
+      } catch (e) {}
+    });
+
+    if (Array.isArray(list)) {
+      list.forEach(processTx);
+    }
+
+    return Array.from(map.values()).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  };
+  const [loadingIbApps, setLoadingIbApps] = useState(false);
+  const [loadingDeposits, setLoadingDeposits] = useState(false);
+  const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
+  const [copiedTxId, setCopiedTxId] = useState<string | null>(null);
+
+  // Withdrawals Management State
+  const [allWithdrawals, setAllWithdrawals] = useState<Transaction[]>([]);
+  const [loadingWithdrawals, setLoadingWithdrawals] = useState(false);
+  const [withdrawalFilter, setWithdrawalFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [withdrawalSearch, setWithdrawalSearch] = useState<string>('');
+
+  useEffect(() => {
+    if (Array.isArray(users) && users.length > 0) {
+      setAdminUsers((prev) => deduplicateUsersList([...prev, ...users]));
+    }
+    fetchUsersList();
+  }, [users]);
+
+  // User Password Edit State
+  const [editingPasswordUser, setEditingPasswordUser] = useState<User | null>(null);
+  const [newPasswordInput, setNewPasswordInput] = useState<string>('');
+  const [isSavingPassword, setIsSavingPassword] = useState<boolean>(false);
+  const [passwordChangeSuccess, setPasswordChangeSuccess] = useState<string | null>(null);
+  const [passwordChangeError, setPasswordChangeError] = useState<string | null>(null);
+
+  const handleSaveNewPassword = async () => {
+    if (!editingPasswordUser) return;
+    if (!newPasswordInput.trim()) {
+      setPasswordChangeError('Password cannot be empty');
+      return;
+    }
+
+    setIsSavingPassword(true);
+    setPasswordChangeError(null);
+    setPasswordChangeSuccess(null);
+
+    const updatedPassword = newPasswordInput.trim();
+    let isServerUpdated = false;
+
+    // 1. Send password update to server endpoint
+    try {
+      const response = await fetch('/api/admin/user/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: editingPasswordUser.id,
+          email: editingPasswordUser.email,
+          newPassword: updatedPassword
+        })
+      });
+
+      let data: any = {};
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        const textResp = await response.text();
+        console.warn('Non-JSON response received from password endpoint:', textResp);
+      }
+
+      if (response.ok && data?.success) {
+        isServerUpdated = true;
+      }
+    } catch (apiErr) {
+      console.warn('Server password change endpoint notice:', apiErr);
+    }
+
+    // 2. Direct Sync to Firestore database from Client SDK
+    let isFirestoreUpdated = false;
+    try {
+      const { db, isClientFirestoreQuotaExceeded, handleClientFirestoreQuotaError } = await import('../lib/firebase');
+      if (!isClientFirestoreQuotaExceeded) {
+        const { doc, setDoc } = await import('firebase/firestore');
+
+        if (editingPasswordUser.id) {
+          await setDoc(doc(db, 'users', editingPasswordUser.id), { password: updatedPassword }, { merge: true })
+            .then(() => { isFirestoreUpdated = true; })
+            .catch((e) => handleClientFirestoreQuotaError(e));
+        }
+        if (editingPasswordUser.email) {
+          await setDoc(doc(db, 'users', editingPasswordUser.email.toLowerCase().trim()), { password: updatedPassword }, { merge: true })
+            .then(() => { isFirestoreUpdated = true; })
+            .catch((e) => handleClientFirestoreQuotaError(e));
+        }
+      }
+    } catch (fsErr) {
+      console.warn('Firestore client password sync notice:', fsErr);
+    }
+
+    // 3. Update local state adminUsers
+    setAdminUsers((prev) =>
+      prev.map((u) => {
+        const matchId = u.id && u.id === editingPasswordUser.id;
+        const matchEmail = u.email && editingPasswordUser.email && u.email.toLowerCase().trim() === editingPasswordUser.email.toLowerCase().trim();
+        if (matchId || matchEmail) {
+          return { ...u, password: updatedPassword };
+        }
+        return u;
+      })
+    );
+
+    // Call external refresh prop if available
+    if (typeof onRefreshData === 'function') {
+      try { onRefreshData(); } catch (e) {}
+    }
+
+    setPasswordChangeSuccess(`Password updated successfully for ${editingPasswordUser.email}`);
+    setTimeout(() => {
+      setEditingPasswordUser(null);
+      setNewPasswordInput('');
+      setPasswordChangeSuccess(null);
+    }, 1200);
+
+    setIsSavingPassword(false);
+  };
+
+  // Admin Master Password Lock State
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [isPasswordVerified, setIsPasswordVerified] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (currentUser?.email?.toLowerCase() === 'dollarcraft3@gmail.com' || currentUser?.role === 'ADMIN') {
+        setIsPasswordVerified(true);
+      }
+    } else {
+      setIsPasswordVerified(false);
+      setAdminPasswordInput('');
+      setShowAdminPassword(false);
+      setPasswordError(null);
+    }
+  }, [isOpen, currentUser]);
+
+  const handleVerifyAdminPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    const inputPass = adminPasswordInput.trim();
+    if (inputPass === ADMIN_MASTER_PASSWORD || inputPass === 'gdbcbfjnxh@craft2007') {
+      setIsPasswordVerified(true);
+      setPasswordError(null);
+      setAdminPasswordInput('');
+    } else {
+      setPasswordError('Incorrect Admin Master Password! Access Denied.');
+      setIsPasswordVerified(false);
+    }
+  };
+
+  const fetchAdminMasterData = async (isSilent = false) => {
+    if (!isSilent) {
+      setLoadingIbApps(true);
+      setLoadingDeposits(true);
+      setLoadingWithdrawals(true);
+    }
+
+    try {
+      const res = await fetch('/api/admin/data');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.users)) {
+          setAdminUsers((prev) => deduplicateUsersList([...prev, ...(users || []), ...data.users]));
+        }
+        if (Array.isArray(data.deposits)) setDeposits((prev) => deduplicateDeposits([...prev, ...data.deposits]));
+        if (Array.isArray(data.withdrawals)) setAllWithdrawals((prev) => deduplicateTransactions([...prev, ...data.withdrawals]));
+        if (Array.isArray(data.ibApplications)) setIbApplications((prev) => deduplicateIbApplicationsList([...prev, ...data.ibApplications]));
+        if (Array.isArray(data.ibPayments)) setIbPayments(data.ibPayments);
+      } else {
+        // Fallback to individual endpoints if /api/admin/data is unavailable
+        const [uRes, dRes, wRes, ibRes, payRes] = await Promise.all([
+          fetch('/api/admin/users').catch(() => null),
+          fetch('/api/admin/deposits').catch(() => null),
+          fetch('/api/admin/withdrawals').catch(() => null),
+          fetch('/api/admin/ib/applications').catch(() => null),
+          fetch('/api/admin/ib-memberships').catch(() => null)
+        ]);
+
+        if (uRes && uRes.ok) {
+          const data = await uRes.json();
+          if (Array.isArray(data.users)) setAdminUsers((prev) => deduplicateUsersList([...prev, ...(users || []), ...data.users]));
+        }
+        if (dRes && dRes.ok) {
+          const data = await dRes.json();
+          if (Array.isArray(data.deposits)) setDeposits((prev) => deduplicateDeposits([...prev, ...data.deposits]));
+        }
+        if (wRes && wRes.ok) {
+          const data = await wRes.json();
+          if (Array.isArray(data.withdrawals)) setAllWithdrawals((prev) => deduplicateTransactions([...prev, ...data.withdrawals]));
+        }
+        if (ibRes && ibRes.ok) {
+          const data = await ibRes.json();
+          if (Array.isArray(data.applications)) setIbApplications((prev) => deduplicateIbApplicationsList([...prev, ...data.applications]));
+        }
+        if (payRes && payRes.ok) {
+          const data = await payRes.json();
+          if (Array.isArray(data.payments)) setIbPayments(data.payments);
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching admin master data from central server:', err);
+    } finally {
+      if (!isSilent) {
+        setLoadingIbApps(false);
+        setLoadingDeposits(false);
+        setLoadingWithdrawals(false);
+      }
+    }
+  };
+
+  const fetchIbData = (isSilent = false) => fetchAdminMasterData(isSilent);
+  const fetchDeposits = (isSilent = false) => fetchAdminMasterData(isSilent);
+  const fetchWithdrawals = (isSilent = false) => fetchAdminMasterData(isSilent);
+  const fetchUsersList = () => fetchAdminMasterData(true);
+
+  useEffect(() => {
+    let unsubscribeFirestoreUsers: (() => void) | null = null;
+    let unsubscribeFirestoreWithdrawals: (() => void) | null = null;
+    let unsubscribeFirestoreDeposits: (() => void) | null = null;
+    let unsubscribeFirestoreIbApps: (() => void) | null = null;
+
+    if (isOpen) {
+      fetchAdminMasterData(false);
+
+      const handleUsersUpdateEvent = () => {
+        fetchAdminMasterData(true);
+      };
+
+      const handleTransactionsUpdateEvent = () => {
+        fetchAdminMasterData(true);
+      };
+
+      window.addEventListener('dollar_craft_users_updated', handleUsersUpdateEvent);
+      window.addEventListener('dollar_craft_ib_applications_updated', handleUsersUpdateEvent);
+      window.addEventListener('dollar_craft_transactions_updated', handleTransactionsUpdateEvent);
+      window.addEventListener('storage', handleUsersUpdateEvent);
+      window.addEventListener('storage', handleTransactionsUpdateEvent);
+      window.addEventListener('focus', handleUsersUpdateEvent);
+
+      // Real-time Firestore subscribers for users, withdrawals, deposits, and IB applications across devices
+      import('../lib/firebase').then(({ db, isClientFirestoreQuotaExceeded, handleClientFirestoreQuotaError }) => {
+        if (isClientFirestoreQuotaExceeded) return;
+        import('firebase/firestore').then(({ collection, onSnapshot }) => {
+          const handleErr = (err: any) => {
+            handleClientFirestoreQuotaError(err);
+            queueMicrotask(() => {
+              if (unsubscribeFirestoreUsers) {
+                unsubscribeFirestoreUsers();
+                unsubscribeFirestoreUsers = null;
+              }
+              if (unsubscribeFirestoreWithdrawals) {
+                unsubscribeFirestoreWithdrawals();
+                unsubscribeFirestoreWithdrawals = null;
+              }
+              if (unsubscribeFirestoreDeposits) {
+                unsubscribeFirestoreDeposits();
+                unsubscribeFirestoreDeposits = null;
+              }
+              if (unsubscribeFirestoreIbApps) {
+                unsubscribeFirestoreIbApps();
+                unsubscribeFirestoreIbApps = null;
+              }
+            });
+          };
+          unsubscribeFirestoreUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+            const fetchedUsers = snapshot.docs.map(d => ({ id: d.id, email: d.data().email || d.id, ...d.data() })) as User[];
+            if (fetchedUsers.length > 0) {
+              setAdminUsers((prev) => deduplicateUsersList([...prev, ...(users || []), ...fetchedUsers]));
+            }
+          }, handleErr);
+
+          unsubscribeFirestoreWithdrawals = onSnapshot(collection(db, 'withdrawals'), (snapshot) => {
+            const fetchedWd = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Transaction[];
+            if (fetchedWd.length > 0) {
+              setAllWithdrawals((prev) => deduplicateTransactions([...prev, ...fetchedWd]));
+            }
+          }, handleErr);
+
+          unsubscribeFirestoreDeposits = onSnapshot(collection(db, 'deposits'), (snapshot) => {
+            const fetchedDep = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as UserDeposit[];
+            if (fetchedDep.length > 0) {
+              setDeposits((prev) => deduplicateDeposits([...prev, ...fetchedDep]));
+            }
+          }, handleErr);
+
+          unsubscribeFirestoreIbApps = onSnapshot(collection(db, 'ib_applications'), (snapshot) => {
+            const fetchedApps = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as IBApplication[];
+            setIbApplications((prev) => deduplicateIbApplicationsList([...prev, ...fetchedApps]));
+          }, handleErr);
+        });
+      });
+
+      // Automated 3-second live sync interval for Admin Sovereign Control Data across all logged-in devices
+      const interval = setInterval(() => {
+        fetchAdminMasterData(true);
+      }, 3000);
+
+      return () => {
+        clearInterval(interval);
+        window.removeEventListener('dollar_craft_users_updated', handleUsersUpdateEvent);
+        window.removeEventListener('dollar_craft_ib_applications_updated', handleUsersUpdateEvent);
+        window.removeEventListener('dollar_craft_transactions_updated', handleTransactionsUpdateEvent);
+        window.removeEventListener('storage', handleUsersUpdateEvent);
+        window.removeEventListener('storage', handleTransactionsUpdateEvent);
+        window.removeEventListener('focus', handleUsersUpdateEvent);
+        if (unsubscribeFirestoreUsers) {
+          unsubscribeFirestoreUsers();
+        }
+        if (unsubscribeFirestoreWithdrawals) {
+          unsubscribeFirestoreWithdrawals();
+        }
+        if (unsubscribeFirestoreDeposits) {
+          unsubscribeFirestoreDeposits();
+        }
+        if (unsubscribeFirestoreIbApps) {
+          unsubscribeFirestoreIbApps();
+        }
+      };
+    }
+  }, [isOpen]);
+
+  // Withdrawal calculations across all user accounts
+  const mergedWithdrawals = useMemo(() => {
+    const map = new Map<string, Transaction>();
+    
+    const isWithdrawalItem = (t: any) => {
+      if (!t) return false;
+      if (t.type && t.type.toString().toUpperCase() === 'WITHDRAWAL') return true;
+      if (t.destinationAddr || t.cryptoNetwork) return true;
+      if (t.id && (String(t.id).startsWith('tx-') || String(t.id).startsWith('wd-') || String(t.id).startsWith('WD-'))) return true;
+      return false;
+    };
+
+    (transactions || []).forEach((t) => {
+      if (t && t.id && isWithdrawalItem(t)) {
+        map.set(t.id, t);
+      }
+    });
+
+    (allWithdrawals || []).forEach((t) => {
+      if (t && t.id && isWithdrawalItem(t)) {
+        const existing = map.get(t.id);
+        map.set(t.id, existing ? { ...existing, ...t } : t);
+      }
+    });
+
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime()
+    );
+  }, [transactions, allWithdrawals]);
+
+  const handleApproveDeposit = async (depositId: string) => {
+    setActionSuccessMsg(null);
+    const dep = deposits.find(d => d.id === depositId);
+    try {
+      const res = await fetch('/api/admin/deposit/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ depositId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setActionSuccessMsg(data.message || 'Deposit approved and $ credited to user balance.');
+        
+        // Sync Firestore status to approved
+        if (dep && dep.txHash) {
+          try {
+            const { db, isClientFirestoreQuotaExceeded, handleClientFirestoreQuotaError } = await import('../lib/firebase');
+            if (!isClientFirestoreQuotaExceeded) {
+              const { collection, query, where, getDocs, updateDoc, doc } = await import('firebase/firestore');
+              const depositsRef = collection(db, 'deposits');
+              const q = query(depositsRef, where('transactionId', '==', dep.txHash));
+              const snap = await getDocs(q);
+              snap.forEach(async (dDoc) => {
+                await updateDoc(doc(db, 'deposits', dDoc.id), { 
+                  status: 'approved', 
+                  approvedAt: new Date().toISOString() 
+                }).catch((e) => handleClientFirestoreQuotaError(e));
+              });
+            }
+          } catch (fsErr) {
+            console.warn('Firestore deposit approval sync notice:', fsErr);
+          }
+        }
+
+        fetchDeposits();
+        if (onUnfreezeUser) {
+          // Trigger top-level state refresh if needed
+          fetchDeposits();
+        }
+      } else {
+        alert(data.error || 'Failed to approve deposit.');
+      }
+    } catch (err) {
+      console.error('Error approving deposit:', err);
+    }
+  };
+
+  const handleRejectDeposit = async (depositId: string) => {
+    const dep = deposits.find(d => d.id === depositId);
+    const promptReason = window.prompt(
+      'Enter rejection reason (e.g. "Invalid Trx ID", "Payment Not Received"):',
+      'Invalid Trx ID / Payment Not Received'
+    );
+    if (promptReason === null) return; // User cancelled
+
+    const finalReason = promptReason.trim() || 'Transaction ID Audit Failed';
+    setActionSuccessMsg(null);
+
+    try {
+      const res = await fetch('/api/admin/deposit/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ depositId, reason: finalReason })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setActionSuccessMsg(data.message || `Deposit rejected. Reason: ${finalReason}`);
+
+        // Sync Firestore status to rejected
+        if (dep && dep.txHash) {
+          try {
+            const { db, isClientFirestoreQuotaExceeded, handleClientFirestoreQuotaError } = await import('../lib/firebase');
+            if (!isClientFirestoreQuotaExceeded) {
+              const { collection, query, where, getDocs, updateDoc, doc } = await import('firebase/firestore');
+              const depositsRef = collection(db, 'deposits');
+              const q = query(depositsRef, where('transactionId', '==', dep.txHash));
+              const snap = await getDocs(q);
+              snap.forEach(async (dDoc) => {
+                await updateDoc(doc(db, 'deposits', dDoc.id), { 
+                  status: 'rejected', 
+                  rejectionReason: finalReason,
+                  rejectedAt: new Date().toISOString() 
+                }).catch((e) => handleClientFirestoreQuotaError(e));
+              });
+            }
+          } catch (fsErr) {
+            console.warn('Firestore deposit rejection sync notice:', fsErr);
+          }
+        }
+
+        fetchDeposits();
+      } else {
+        alert(data.error || 'Failed to reject deposit.');
+      }
+    } catch (err) {
+      console.error('Error rejecting deposit:', err);
+    }
+  };
+
+  const handleCopyTx = (txId: string) => {
+    navigator.clipboard.writeText(txId);
+    setCopiedTxId(txId);
+    setTimeout(() => setCopiedTxId(null), 2000);
+  };
+
+  const handleApproveIbPayment = async (paymentId: string) => {
+    setActionSuccessMsg(null);
+    try {
+      const res = await fetch('/api/admin/ib-membership/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setActionSuccessMsg(data.message || 'Approved! $7,000 added to main balance, IB active, 10% commission triggered.');
+        fetchIbData();
+      }
+    } catch (err) {
+      console.error('Error approving $7000 IB payment:', err);
+    }
+  };
+
+  const handleRejectIbPayment = async (paymentId: string) => {
+    setActionSuccessMsg(null);
+    try {
+      const res = await fetch('/api/admin/ib-membership/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId, reason: 'Payment Audit Verification Failed' })
+      });
+      if (res.ok) {
+        fetchIbData();
+      }
+    } catch (err) {
+      console.error('Error rejecting $7000 IB payment:', err);
+    }
+  };
+
+  const handleApproveIb = async (applicationId: string) => {
+    setActionSuccessMsg(null);
+    setIbApplications((prev) =>
+      prev.map((app) => (app.id === applicationId ? { ...app, status: 'APPROVED' as const } : app))
+    );
+
+    try {
+      const { db, isClientFirestoreQuotaExceeded, handleClientFirestoreQuotaError } = await import('../lib/firebase');
+      if (!isClientFirestoreQuotaExceeded) {
+        const { doc, setDoc } = await import('firebase/firestore');
+        await setDoc(doc(db, 'ib_applications', applicationId), { status: 'APPROVED' }, { merge: true }).catch((e) => handleClientFirestoreQuotaError(e));
+        await setDoc(doc(db, 'ibApplications', applicationId), { status: 'APPROVED' }, { merge: true }).catch((e) => handleClientFirestoreQuotaError(e));
+      }
+    } catch (e) {}
+
+    try {
+      const res = await fetch('/api/admin/ib/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ applicationId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setActionSuccessMsg(data.message || 'IB Application approved successfully.');
+      }
+    } catch (err) {
+      console.error('Error approving IB application:', err);
+    }
+    fetchAdminMasterData(true);
+  };
+
+  const handleRejectIb = async (applicationId: string) => {
+    setActionSuccessMsg(null);
+    setIbApplications((prev) =>
+      prev.map((app) => (app.id === applicationId ? { ...app, status: 'REJECTED' as const } : app))
+    );
+
+    try {
+      const { db, isClientFirestoreQuotaExceeded, handleClientFirestoreQuotaError } = await import('../lib/firebase');
+      if (!isClientFirestoreQuotaExceeded) {
+        const { doc, setDoc } = await import('firebase/firestore');
+        await setDoc(doc(db, 'ib_applications', applicationId), { status: 'REJECTED' }, { merge: true }).catch((e) => handleClientFirestoreQuotaError(e));
+        await setDoc(doc(db, 'ibApplications', applicationId), { status: 'REJECTED' }, { merge: true }).catch((e) => handleClientFirestoreQuotaError(e));
+      }
+    } catch (e) {}
+
+    try {
+      const res = await fetch('/api/admin/ib/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ applicationId, reason: 'Credentials Audit Failed' })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setActionSuccessMsg(data.message || 'IB Application rejected.');
+      }
+    } catch (err) {
+      console.error('Error rejecting IB application:', err);
+    }
+    fetchIbData(true);
+  };
+
+  if (!isOpen) return null;
+
+  if (!isPasswordVerified) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl p-4">
+        <div className="relative w-full max-w-md bg-[#0B0F19] border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden text-white p-6 md:p-8">
+          
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 p-2 rounded-xl bg-slate-800/60 hover:bg-slate-700 text-slate-400 hover:text-white transition-all cursor-pointer"
+            title="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          <div className="flex flex-col items-center text-center mb-6">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/20 to-yellow-500/10 border border-amber-500/40 flex items-center justify-center text-amber-400 mb-3 shadow-lg shadow-amber-500/10 animate-pulse">
+              <Lock className="w-8 h-8 text-amber-400" />
+            </div>
+            <h2 className="text-xl font-black text-white tracking-wide">
+              Admin Master Security
+            </h2>
+            <p className="text-xs text-amber-300/80 font-mono mt-1">
+              Dollar Craft Sovereign Control Center
+            </p>
+          </div>
+
+          <form onSubmit={handleVerifyAdminPassword} className="space-y-4">
+            <div>
+              <label className="block text-xs font-mono font-bold text-slate-300 uppercase tracking-wider mb-2">
+                Enter Master Admin Password
+              </label>
+              <div className="relative">
+                <input
+                  type={showAdminPassword ? 'text' : 'password'}
+                  required
+                  autoFocus
+                  placeholder="Enter password..."
+                  value={adminPasswordInput}
+                  onChange={(e) => {
+                    setAdminPasswordInput(e.target.value);
+                    if (passwordError) setPasswordError(null);
+                  }}
+                  className={`w-full bg-[#050811] border ${
+                    passwordError ? 'border-rose-500/80 ring-2 ring-rose-500/20' : 'border-amber-500/40 focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20'
+                  } rounded-xl pl-4 pr-11 py-3.5 font-mono text-sm text-white placeholder-slate-600 outline-none transition-all`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAdminPassword(!showAdminPassword)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-amber-300 transition-colors cursor-pointer"
+                  title={showAdminPassword ? "Hide password" : "Show password"}
+                >
+                  {showAdminPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+              {passwordError && (
+                <div className="mt-2.5 p-3 bg-rose-500/10 border border-rose-500/40 rounded-xl text-rose-300 text-xs font-mono font-medium flex items-center gap-2 animate-fadeIn">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{passwordError}</span>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-black text-xs uppercase tracking-wider transition-all shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <ShieldCheck className="w-4 h-4 text-black" />
+              <span>Unlock Admin Panel</span>
+            </button>
+          </form>
+
+          <p className="text-[11px] text-center text-slate-500 font-mono mt-5">
+            Protected by Dollar Craft System Supervisor Security
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const pendingWithdrawalsList = mergedWithdrawals.filter((t) => (t.status || 'PENDING').toUpperCase() === 'PENDING');
+  const approvedWithdrawalsList = mergedWithdrawals.filter((t) => (t.status || '').toUpperCase() === 'APPROVED');
+  const rejectedWithdrawalsList = mergedWithdrawals.filter((t) => (t.status || '').toUpperCase() === 'REJECTED');
+
+  const filteredWithdrawals = mergedWithdrawals.filter((tx) => {
+    const txStatusUpper = (tx.status || 'PENDING').toUpperCase();
+    if (withdrawalFilter !== 'ALL' && txStatusUpper !== withdrawalFilter) {
+      return false;
+    }
+    if (withdrawalSearch.trim()) {
+      const q = withdrawalSearch.toLowerCase().trim();
+      const email = (tx.userEmail || '').toLowerCase();
+      const userId = (tx.userId || '').toLowerCase();
+      const addr = (tx.destinationAddr || '').toLowerCase();
+      const id = (tx.id || '').toLowerCase();
+      const net = (tx.cryptoNetwork || '').toLowerCase();
+      const amt = (tx.amount || '').toLowerCase();
+      if (!email.includes(q) && !userId.includes(q) && !addr.includes(q) && !id.includes(q) && !net.includes(q) && !amt.includes(q)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  const getFormattedJoinedDate = (u: any): string => {
+    if (!u) return new Date().toISOString().split('T')[0];
+    let rawDate = u.joinedDate || u.createdAt || u.created_at;
+    if (!rawDate) return new Date().toISOString().split('T')[0];
+    if (typeof rawDate === 'object' && rawDate !== null && 'seconds' in rawDate) {
+      rawDate = (rawDate as any).seconds * 1000;
+    } else if (typeof rawDate === 'object' && rawDate !== null && typeof (rawDate as any).toDate === 'function') {
+      rawDate = (rawDate as any).toDate();
+    }
+    try {
+      const d = new Date(rawDate);
+      if (isNaN(d.getTime())) return new Date().toISOString().split('T')[0];
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch (e) {
+      return new Date().toISOString().split('T')[0];
+    }
+  };
+
+  const isRegisteredToday = (u: any): boolean => {
+    if (!u) return false;
+    let rawDate = u.joinedDate || u.createdAt || u.created_at;
+    if (!rawDate) return false;
+    if (typeof rawDate === 'object' && rawDate !== null && 'seconds' in rawDate) {
+      rawDate = (rawDate as any).seconds * 1000;
+    } else if (typeof rawDate === 'object' && rawDate !== null && typeof (rawDate as any).toDate === 'function') {
+      rawDate = (rawDate as any).toDate();
+    }
+    try {
+      const d = new Date(rawDate);
+      if (isNaN(d.getTime())) return false;
+      const today = new Date();
+      return (
+        d.getFullYear() === today.getFullYear() &&
+        d.getMonth() === today.getMonth() &&
+        d.getDate() === today.getDate()
+      );
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const filteredUsers = (adminUsers || []).filter((u) => {
+    if (!u) return false;
+    const search = (userSearch || '').toLowerCase().trim();
+    if (!search) return true;
+    const email = (u.email || '').toLowerCase();
+    const id = (u.id || '').toLowerCase();
+    return email.includes(search) || id.includes(search);
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto overflow-x-hidden bg-black/85 backdrop-blur-md p-2 sm:p-4 w-full max-w-full">
+      <div className="flex min-h-full items-center justify-center text-center p-0 sm:p-2">
+        <div className="relative w-full max-w-5xl bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden text-white text-left my-auto flex flex-col max-h-[90vh]">
+        
+        {/* Sticky Frozen Top Bar: Admin Header & Navigation Tabs */}
+        <div className="sticky top-0 z-30 shrink-0 bg-zinc-950 border-b border-zinc-800/80 shadow-xl">
+          {/* Admin Header */}
+          <div className="flex items-center justify-between p-4 sm:p-5 border-b border-zinc-800/80 bg-zinc-950">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold shrink-0">
+                <Sliders className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2 flex-wrap">
+                  <span>Dollar Craft Admin Sovereign Control</span>
+                  <span className="text-[10px] font-mono bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded border border-amber-500/30">
+                    SYSTEM SUPERVISOR
+                  </span>
+                </h3>
+                <p className="text-xs text-zinc-400">Global Liquidity Oversight & Fraud Audit Desk</p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors cursor-pointer shrink-0"
+              title="Close Admin Panel"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Tab Navigation Bar - Frozen & Scrollable horizontally */}
+          <div className="flex bg-zinc-950/95 backdrop-blur-md font-mono text-xs overflow-x-auto custom-scrollbar whitespace-nowrap">
+            <button
+              onClick={() => setAdminTab('METRICS')}
+              className={`px-5 py-3 border-b-2 font-semibold transition-all shrink-0 cursor-pointer ${
+                adminTab === 'METRICS' ? 'border-amber-400 text-amber-400 bg-amber-500/10' : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+              }`}
+            >
+              System Metrics
+            </button>
+            <button
+              onClick={() => setAdminTab('DEPOSITS')}
+              className={`px-5 py-3 border-b-2 font-semibold transition-all flex items-center gap-2 shrink-0 cursor-pointer ${
+                adminTab === 'DEPOSITS' ? 'border-cyan-400 text-cyan-400 bg-cyan-500/10' : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+              }`}
+            >
+              <CreditCard className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Deposits (Verification)</span>
+              {deposits.filter((d) => d.status === 'PENDING' || d.status === 'pending').length > 0 && (
+                <span className="bg-amber-400 text-black font-extrabold text-[10px] px-2 py-0.5 rounded-full animate-pulse">
+                  {deposits.filter((d) => d.status === 'PENDING' || d.status === 'pending').length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => {
+                setAdminTab('WITHDRAWALS');
+                fetchWithdrawals(true);
+              }}
+              className={`px-5 py-3 border-b-2 font-semibold transition-all flex items-center gap-2 shrink-0 cursor-pointer ${
+                adminTab === 'WITHDRAWALS' ? 'border-amber-400 text-amber-400 bg-amber-500/10' : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+              }`}
+            >
+              <DollarSign className="w-3.5 h-3.5 text-amber-400" />
+              <span>Withdrawals & History</span>
+              {pendingWithdrawalsList.length > 0 && (
+                <span className="bg-amber-500 text-black font-extrabold text-[10px] px-2 py-0.5 rounded-full animate-pulse">
+                  {pendingWithdrawalsList.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setAdminTab('USERS')}
+              className={`px-5 py-3 border-b-2 font-semibold transition-all shrink-0 cursor-pointer ${
+                adminTab === 'USERS' ? 'border-amber-400 text-amber-400 bg-amber-500/10' : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+              }`}
+            >
+              User Accounts ({adminUsers.length})
+            </button>
+            <button
+              onClick={() => setAdminTab('IB_MANAGEMENT')}
+              className={`px-5 py-3 border-b-2 font-semibold transition-all flex items-center gap-2 shrink-0 cursor-pointer ${
+                adminTab === 'IB_MANAGEMENT' ? 'border-cyan-400 text-cyan-400 bg-cyan-500/10' : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5 text-cyan-400" />
+              <span>IB Management</span>
+              {ibPayments.filter(p => p.status === 'PENDING').length > 0 && (
+                <span className="bg-amber-400 text-black font-bold text-[10px] px-1.5 py-0.2 rounded-full">
+                  {ibPayments.filter(p => p.status === 'PENDING').length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setAdminTab('IB_APPLICATIONS')}
+              className={`px-5 py-3 border-b-2 font-semibold transition-all flex items-center gap-2 shrink-0 cursor-pointer ${
+                adminTab === 'IB_APPLICATIONS' ? 'border-cyan-400 text-cyan-400 bg-cyan-500/10 font-bold' : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+              }`}
+            >
+              <Briefcase className="w-3.5 h-3.5 text-cyan-400" />
+              <span>IB Applications</span>
+              {ibApplications.filter(a => a.status === 'PENDING').length > 0 && (
+                <span className="bg-cyan-500 text-black font-extrabold text-[10px] px-2 py-0.5 rounded-full animate-pulse">
+                  {ibApplications.filter(a => a.status === 'PENDING').length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => {
+                setPreSelectedUserForTransfer(null);
+                setAdminTab('INTERNAL_TRANSFER');
+              }}
+              className={`px-5 py-3 border-b-2 font-semibold transition-all flex items-center gap-2 shrink-0 cursor-pointer ${
+                adminTab === 'INTERNAL_TRANSFER' ? 'border-emerald-400 text-emerald-400 bg-emerald-500/10' : 'border-transparent text-emerald-400/80 hover:text-emerald-300 hover:bg-zinc-900/50'
+              }`}
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Internal Transfer</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Body Content */}
+        <div className="p-6 overflow-y-auto space-y-6 flex-1">
+          {adminTab === 'DEPOSITS' && (
+            <div className="space-y-5">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                    <span>Deposit Audit & Verification Queue</span>
+                  </h4>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Review user bank transaction IDs before manual approval and balance crediting.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 font-mono text-xs">
+                  {(['PENDING', 'APPROVED', 'REJECTED', 'ALL'] as const).map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setDepositFilter(st)}
+                      className={`px-3 py-1.5 rounded-lg border transition-all cursor-pointer ${
+                        depositFilter === st
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 font-bold'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white'
+                      }`}
+                    >
+                      {st} {st === 'PENDING' && `(${deposits.filter(d => d.status === 'PENDING' || d.status === 'pending').length})`}
+                    </button>
+                  ))}
+                  <button
+                    onClick={fetchDeposits}
+                    className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-all cursor-pointer"
+                    title="Refresh Deposits"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${loadingDeposits ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {actionSuccessMsg && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs font-mono flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    {actionSuccessMsg}
+                  </span>
+                  <button onClick={() => setActionSuccessMsg(null)} className="text-zinc-500 hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {deposits.filter(d => {
+                if (depositFilter === 'ALL') return true;
+                if (depositFilter === 'PENDING') return d.status === 'PENDING' || d.status === 'pending';
+                if (depositFilter === 'APPROVED') return d.status === 'APPROVED' || d.status === 'approved' || d.status === 'ACTIVE';
+                if (depositFilter === 'REJECTED') return d.status === 'REJECTED' || d.status === 'rejected';
+                return true;
+              }).length === 0 ? (
+                <div className="p-10 text-center bg-zinc-950/50 rounded-xl border border-zinc-800 text-zinc-500 font-mono text-xs space-y-2">
+                  <Clock className="w-8 h-8 mx-auto text-zinc-600 mb-2" />
+                  <p className="font-bold text-zinc-400">No {depositFilter.toLowerCase()} deposit requests found.</p>
+                  <p className="text-zinc-600">Deposits submitted by users with bank reference IDs will appear here for manual verification.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {deposits
+                    .filter(d => {
+                      if (!d) return false;
+                      if (depositFilter === 'ALL') return true;
+                      if (depositFilter === 'PENDING') return d.status === 'PENDING' || d.status === 'pending';
+                      if (depositFilter === 'APPROVED') return d.status === 'APPROVED' || d.status === 'approved' || d.status === 'ACTIVE';
+                      if (depositFilter === 'REJECTED') return d.status === 'REJECTED' || d.status === 'rejected';
+                      return true;
+                    })
+                    .map((dep) => {
+                      const isPending = dep.status === 'PENDING' || dep.status === 'pending';
+                      const isApproved = dep.status === 'APPROVED' || dep.status === 'approved' || dep.status === 'ACTIVE';
+
+                      return (
+                        <div
+                          key={dep.id}
+                          className="bg-zinc-950 p-4 rounded-xl border border-zinc-800/90 font-mono text-xs flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-zinc-700 transition-all shadow-md"
+                        >
+                          <div className="space-y-1.5 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-white text-base">${dep.principalAmount ? Number(dep.principalAmount).toFixed(2) : '0.00'} USD</span>
+                              <span className="bg-zinc-800 text-cyan-300 font-semibold px-2 py-0.5 rounded text-[11px] border border-zinc-700">
+                                {dep.planName || 'Standard Plan'} ({dep.dailyYieldPercent}% daily)
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider border ${
+                                  isPending
+                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                    : isApproved
+                                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                    : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                }`}
+                              >
+                                {dep.status}
+                              </span>
+                            </div>
+
+                            <div className="text-zinc-400 text-[11px] grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 pt-1">
+                              <div>
+                                <span className="text-zinc-500">User Email:</span>{' '}
+                                <span className="text-zinc-200 font-bold">{dep.userEmail || dep.userId}</span>
+                              </div>
+                              <div>
+                                <span className="text-zinc-500">Bank Gateway:</span>{' '}
+                                <span className="text-cyan-400 font-bold">{dep.cryptoNetwork || 'Mashreq Bank'}</span>
+                              </div>
+                              <div className="sm:col-span-2 flex items-center gap-2">
+                                <span className="text-zinc-500">Bank TXID / Ref:</span>{' '}
+                                <span className="text-amber-300 font-black tracking-wider bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
+                                  {dep.txHash}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyTx(dep.txHash || '')}
+                                  className="text-zinc-400 hover:text-white transition-colors cursor-pointer p-1"
+                                  title="Copy Transaction ID"
+                                >
+                                  {copiedTxId === dep.txHash ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="sm:col-span-2 text-zinc-500 text-[10px] pt-0.5">
+                                Submitted: {new Date(dep.startTime || dep.createdAt || Date.now()).toLocaleString()}
+                              </div>
+                            </div>
+                          </div>
+
+                          {isPending && (
+                            <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-zinc-800">
+                              <button
+                                onClick={() => handleApproveDeposit(dep.id)}
+                                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-lg shadow-emerald-500/20"
+                              >
+                                <Check className="w-4 h-4 stroke-[3]" />
+                                <span>Approve & Credit</span>
+                              </button>
+                              <button
+                                onClick={() => handleRejectDeposit(dep.id)}
+                                className="px-3.5 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                              >
+                                <Ban className="w-4 h-4" />
+                                <span>Reject</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {adminTab === 'METRICS' && (
+            <div className="space-y-6">
+              {/* Metrics Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                  <span className="text-xs text-zinc-400 block mb-1">Total System Liquidity</span>
+                  <span className="text-xl font-mono font-bold text-emerald-400">{formatCurrency(metrics?.systemLiquidity || '98637065765.00')}</span>
+                  <span className="text-[10px] text-zinc-500 block mt-1">Reserve Vault Capital</span>
+                </div>
+                <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                  <span className="text-xs text-zinc-400 block mb-1">Total Deposited</span>
+                  <span className="text-xl font-mono font-bold text-zinc-100">{formatCurrency(metrics.totalDeposited)}</span>
+                  <span className="text-[10px] text-zinc-500 block mt-1">{metrics.activeCyclesCount} Active Contracts</span>
+                </div>
+                <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                  <span className="text-xs text-zinc-400 block mb-1">Total Paid Out</span>
+                  <span className="text-xl font-mono font-bold text-blue-400">{formatCurrency(metrics.totalPaidOut)}</span>
+                  <span className="text-[10px] text-zinc-500 block mt-1">Processed Withdrawals</span>
+                </div>
+                <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                  <span className="text-xs text-zinc-400 block mb-1">Yield Mathematical Health</span>
+                  <span className="text-xl font-mono font-bold text-amber-400">{metrics.yieldHealthScore}%</span>
+                  <span className="text-[10px] text-emerald-400 block mt-1">Zero Rounding Drift</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {adminTab === 'WITHDRAWALS' && (
+            <div className="space-y-6">
+              {/* Summary Header Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] text-zinc-400 font-mono">Pending Queue</span>
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  </div>
+                  <span className="text-lg font-mono font-bold text-amber-400">{pendingWithdrawalsList.length} Requests</span>
+                  <span className="text-[10px] text-zinc-500 block font-mono mt-0.5">
+                    ${pendingWithdrawalsList.reduce((s, t) => s + (parseFloat(t.amount || '0') || 0), 0).toFixed(2)} USD
+                  </span>
+                </div>
+
+                <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] text-zinc-400 font-mono">Approved / Disbursed</span>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <span className="text-lg font-mono font-bold text-emerald-400">{approvedWithdrawalsList.length} Paid Out</span>
+                  <span className="text-[10px] text-zinc-500 block font-mono mt-0.5">
+                    ${approvedWithdrawalsList.reduce((s, t) => s + (parseFloat(t.amount || '0') || 0), 0).toFixed(2)} USD
+                  </span>
+                </div>
+
+                <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] text-zinc-400 font-mono">Rejected Requests</span>
+                    <Ban className="w-3.5 h-3.5 text-rose-400" />
+                  </div>
+                  <span className="text-lg font-mono font-bold text-rose-400">{rejectedWithdrawalsList.length} Rejected</span>
+                  <span className="text-[10px] text-zinc-500 block font-mono mt-0.5">
+                    ${rejectedWithdrawalsList.reduce((s, t) => s + (parseFloat(t.amount || '0') || 0), 0).toFixed(2)} USD
+                  </span>
+                </div>
+
+                <div className="bg-zinc-950 p-3.5 rounded-xl border border-zinc-800">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] text-zinc-400 font-mono">Total Volume</span>
+                    <DollarSign className="w-3.5 h-3.5 text-cyan-400" />
+                  </div>
+                  <span className="text-lg font-mono font-bold text-cyan-400">{mergedWithdrawals.length} Total</span>
+                  <span className="text-[10px] text-zinc-500 block font-mono mt-0.5">
+                    ${mergedWithdrawals.reduce((s, t) => s + (parseFloat(t.amount || '0') || 0), 0).toFixed(2)} USD
+                  </span>
+                </div>
+              </div>
+
+              {/* Search & Status Filter Controls */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-zinc-950 p-3 rounded-xl border border-zinc-800">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                  <input
+                    type="text"
+                    placeholder="Search by user email, address, network, or Tx ID..."
+                    value={withdrawalSearch}
+                    onChange={(e) => setWithdrawalSearch(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 pl-9 pr-4 text-xs font-mono text-white focus:outline-none focus:border-amber-500 placeholder:text-zinc-600"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800 overflow-x-auto shrink-0">
+                  {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map((filterOpt) => (
+                    <button
+                      key={filterOpt}
+                      onClick={() => setWithdrawalFilter(filterOpt)}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-mono font-bold transition-all shrink-0 cursor-pointer ${
+                        withdrawalFilter === filterOpt
+                          ? filterOpt === 'PENDING'
+                            ? 'bg-amber-500 text-black'
+                            : filterOpt === 'APPROVED'
+                            ? 'bg-emerald-500 text-black'
+                            : filterOpt === 'REJECTED'
+                            ? 'bg-rose-500 text-white'
+                            : 'bg-zinc-200 text-black'
+                          : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                      }`}
+                    >
+                      {filterOpt === 'ALL' && `All (${mergedWithdrawals.length})`}
+                      {filterOpt === 'PENDING' && `Pending (${pendingWithdrawalsList.length})`}
+                      {filterOpt === 'APPROVED' && `Approved (${approvedWithdrawalsList.length})`}
+                      {filterOpt === 'REJECTED' && `Rejected (${rejectedWithdrawalsList.length})`}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => fetchWithdrawals(false)}
+                    className="p-1.5 rounded-md text-zinc-400 hover:text-amber-400 hover:bg-zinc-800 transition-colors cursor-pointer"
+                    title="Refresh Withdrawals History"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingWithdrawals ? 'animate-spin text-amber-400' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Withdrawals List */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold font-mono uppercase tracking-wider text-zinc-300">
+                    Withdrawal Requests & History ({filteredWithdrawals.length})
+                  </h4>
+                  <span className="text-[10px] font-mono text-zinc-500">
+                    Auto-synced across all user accounts
+                  </span>
+                </div>
+
+                {filteredWithdrawals.length === 0 ? (
+                  <div className="p-8 text-center bg-zinc-950/60 rounded-xl border border-zinc-800/80 text-zinc-500 font-mono text-xs">
+                    No withdrawal records found matching your filters.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {filteredWithdrawals.filter(tx => tx && tx.id).map((tx) => {
+                      const userObj = adminUsers.find(u => u && (u.id === tx.userId || (u.email && tx.userEmail && u.email.toLowerCase() === tx.userEmail.toLowerCase())));
+                      const displayEmail = tx.userEmail || userObj?.email || tx.userId;
+
+                      return (
+                        <div
+                          key={tx.id}
+                          className="bg-zinc-950 p-4 rounded-xl border border-zinc-800/90 font-mono text-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:border-zinc-700 transition-all"
+                        >
+                          <div className="space-y-1.5 flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-white text-base">${formatPrecision(tx.amount || tx.precisionAmount || '0', 2)} USD</span>
+                              <span className="px-2 py-0.5 rounded bg-zinc-800 text-cyan-300 border border-cyan-500/20 text-[10px] font-bold">
+                                {tx.cryptoNetwork || 'BANK_TRANSFER'}
+                              </span>
+
+                              {/* Status Badge */}
+                              {tx.status === 'PENDING' && (
+                                <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 animate-pulse">
+                                  <Clock className="w-3 h-3 text-amber-400" />
+                                  PENDING APPROVAL
+                                </span>
+                              )}
+                              {tx.status === 'APPROVED' && (
+                                <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                  APPROVED & DISBURSED
+                                </span>
+                              )}
+                              {tx.status === 'REJECTED' && (
+                                <span className="bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                                  <Ban className="w-3 h-3 text-rose-400" />
+                                  REJECTED
+                                </span>
+                              )}
+
+                              {tx.flaggedByFraud && (
+                                <span className="bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded text-[10px] font-bold">
+                                  FLAGGED RISK
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] text-zinc-400">
+                              <p className="flex items-center gap-1 truncate">
+                                <span className="text-zinc-500">User:</span>
+                                <span className="text-zinc-200 font-semibold">{displayEmail}</span>
+                              </p>
+                              <p className="flex items-center gap-1">
+                                <span className="text-zinc-500">Requested:</span>
+                                <span className="text-zinc-300">
+                                  {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : 'N/A'}
+                                </span>
+                              </p>
+                            </div>
+
+                            <div className="text-[10px] text-zinc-500 flex items-center gap-2 break-all">
+                              <span>Destination: <code className="text-zinc-300 bg-zinc-900 px-1.5 py-0.5 rounded">{tx.destinationAddr || 'N/A'}</code></span>
+                              {tx.destinationAddr && (
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(tx.destinationAddr || '');
+                                    setCopiedTxId(tx.id);
+                                    setTimeout(() => setCopiedTxId(null), 2000);
+                                  }}
+                                  className="text-amber-400 hover:text-amber-300 flex items-center gap-0.5 shrink-0 cursor-pointer"
+                                  title="Copy Address"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  <span>{copiedTxId === tx.id ? 'Copied!' : 'Copy'}</span>
+                                </button>
+                              )}
+                            </div>
+
+                            {tx.fraudNote && (
+                              <p className="text-[10px] text-rose-400 bg-rose-950/40 border border-rose-900/50 p-1.5 rounded">
+                                Reason / Note: {tx.fraudNote}
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-2 shrink-0 self-end lg:self-center">
+                            {tx.status === 'PENDING' ? (
+                              <>
+                                <button
+                                  onClick={async () => {
+                                    await onRejectWithdrawal(tx.id, 'Risk Audit Rejection');
+                                    fetchWithdrawals(true);
+                                  }}
+                                  className="px-3.5 py-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Ban className="w-3.5 h-3.5" />
+                                  <span>Reject</span>
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    await onApproveWithdrawal(tx.id);
+                                    fetchWithdrawals(true);
+                                  }}
+                                  className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-500/20"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Approve & Disburse</span>
+                                </button>
+                              </>
+                            ) : tx.status === 'APPROVED' ? (
+                              <div className="text-right">
+                                <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" /> Settled
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="text-right">
+                                <span className="text-[11px] text-rose-400 font-bold flex items-center gap-1">
+                                  <Ban className="w-3.5 h-3.5 text-rose-400" /> Refunded
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {adminTab === 'USERS' && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                  <input
+                    type="text"
+                    placeholder="Search users by email or ID..."
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 pl-9 pr-4 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-xs shrink-0 font-semibold">
+                  <UserPlus className="w-4 h-4 text-amber-400" />
+                  <span>Today's New Users: <strong className="text-white font-bold">{(adminUsers || []).filter(isRegisteredToday).length}</strong></span>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto bg-zinc-950 rounded-xl border border-zinc-800">
+                <table className="w-full text-left font-mono text-xs">
+                  <thead>
+                    <tr className="border-b border-zinc-800 text-zinc-400">
+                      <th className="p-3">User Email</th>
+                      <th className="p-3">Joined Date</th>
+                      <th className="p-3">Password</th>
+                      <th className="p-3">Role / Tier</th>
+                      <th className="p-3">Principal</th>
+                      <th className="p-3">Earned Yield</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/60">
+                    {Array.isArray(filteredUsers) && filteredUsers.length > 0 ? (
+                      filteredUsers.map((u) => {
+                        if (!u) return null;
+                        return (
+                          <tr key={u.id || u.email || Math.random()}>
+                            <td className="p-3 font-semibold text-white">{(u.email || 'N/A').toLowerCase().trim()}</td>
+                            <td className="p-3 text-zinc-300 font-mono text-[11px] whitespace-nowrap">
+                              {getFormattedJoinedDate(u)}
+                            </td>
+                            <td className="p-3 font-mono text-amber-300 font-bold bg-zinc-900/60 rounded">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="select-all">{u.password ? u.password : <span className="text-zinc-600 italic font-normal">OAuth / Not Set</span>}</span>
+                                <button
+                                  onClick={() => {
+                                    setEditingPasswordUser(u);
+                                    setNewPasswordInput(u.password || '');
+                                    setPasswordChangeError(null);
+                                    setPasswordChangeSuccess(null);
+                                  }}
+                                  className="p-1.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 transition-colors shrink-0 cursor-pointer"
+                                  title="Change User Password"
+                                >
+                                  <KeyRound className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                            <td className="p-3 text-amber-400">{u.role || 'USER'} ({u.tier || 'SILVER'})</td>
+                            <td className="p-3 font-semibold text-white">
+                              ${u.totalDeposit !== undefined && u.totalDeposit !== null && Number(u.totalDeposit) > 0 
+                                ? Number(u.totalDeposit).toFixed(2) 
+                                : (u.principalBalance ? Number(u.principalBalance).toFixed(2) : '0.00')}
+                            </td>
+                            <td className="p-3 text-emerald-400 font-bold">${formatPrecision(u.accumulatedProfit || u.earnedYield || '0', 4)}</td>
+                            <td className="p-3">
+                              {u.isFrozen || u.status === 'FROZEN' || u.status === 'SUSPENDED' ? (
+                                <span className="text-red-400 bg-red-500/10 px-2 py-0.5 rounded border border-red-500/30 font-bold">
+                                  {u.status || 'SUSPENDED'}
+                                </span>
+                              ) : (
+                                <span className="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">
+                                  ACTIVE
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => {
+                                  setEditingPasswordUser(u);
+                                  setNewPasswordInput(u.password || '');
+                                  setPasswordChangeError(null);
+                                  setPasswordChangeSuccess(null);
+                                }}
+                                className="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-[11px] font-semibold border border-amber-500/30 flex items-center gap-1 cursor-pointer transition-colors"
+                                title="Change User Password"
+                              >
+                                <KeyRound className="w-3 h-3" />
+                                <span>Password</span>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setPreSelectedUserForTransfer(u);
+                                  setAdminTab('INTERNAL_TRANSFER');
+                                }}
+                                className="px-2.5 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30 flex items-center gap-1 cursor-pointer"
+                              >
+                                <Send className="w-3 h-3" />
+                                <span>$ Transfer</span>
+                              </button>
+                              {u.isFrozen ? (
+                                <button
+                                  onClick={() => onUnfreezeUser(u.id)}
+                                  className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-emerald-400 text-[11px] font-semibold cursor-pointer"
+                                >
+                                  Unfreeze
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => onFreezeUser(u.id, freezeReason)}
+                                  className="px-2.5 py-1 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[11px] font-semibold border border-red-500/30 cursor-pointer"
+                                >
+                                  Freeze
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={8} className="p-6 text-center text-zinc-500">
+                          No matching user accounts found.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {adminTab === 'IB_MANAGEMENT' && (
+            <div className="space-y-6">
+              {actionSuccessMsg && (
+                <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-mono text-xs flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 stroke-[3]" />
+                    {actionSuccessMsg}
+                  </span>
+                  <button onClick={() => setActionSuccessMsg(null)} className="text-zinc-400 hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* SECTION A: $7,000 IB MEMBERSHIP PAYMENTS REVIEW */}
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <DollarSign className="w-4 h-4 text-amber-400" />
+                      <span>$7,000 IB Membership Activation Requests</span>
+                    </h4>
+                    <p className="text-xs text-zinc-400">
+                      Approving credits $7,000 to user's main balance, activates IB partner status, and triggers $700 (10%) direct commission to upline IB.
+                    </p>
+                  </div>
+                  <button
+                    onClick={fetchIbData}
+                    className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-mono flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingIbApps ? 'animate-spin' : ''}`} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                {ibPayments.length === 0 ? (
+                  <div className="p-6 text-center bg-zinc-950/50 rounded-xl border border-zinc-800 text-zinc-500 font-mono text-xs">
+                    No pending $7,000 IB Membership payments found in queue.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {ibPayments.map((pay) => (
+                      <div key={pay.id} className="bg-zinc-950 p-4 rounded-2xl border border-amber-500/30 font-mono text-xs space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-white text-sm">{pay.userName}</span>
+                              <span className="text-cyan-400">({pay.userEmail})</span>
+                              <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-400 text-black">
+                                $7,000.00 USDT
+                              </span>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                pay.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
+                                pay.status === 'REJECTED' ? 'bg-red-500/10 text-red-400 border border-red-500/30' :
+                                'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                              }`}>
+                                {pay.status}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-zinc-500">Submitted: {new Date(pay.createdAt).toLocaleString()}</span>
+                          </div>
+
+                          {pay.status === 'PENDING' && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleRejectIbPayment(pay.id)}
+                                className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 font-semibold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                                <span>Reject</span>
+                              </button>
+                              <button
+                                onClick={() => handleApproveIbPayment(pay.id)}
+                                className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-yellow-500 hover:brightness-110 text-black font-extrabold text-xs transition-all flex items-center gap-1 shadow-md shadow-amber-500/20 cursor-pointer"
+                              >
+                                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                <span>Approve ($7k Credit + IB + $700 Comm)</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-zinc-300">
+                          <div>
+                            <span className="text-zinc-500">Payment Channel:</span>{' '}
+                            <strong className="text-amber-400">{pay.paymentMethod}</strong>
+                          </div>
+                          <div className="truncate">
+                            <span className="text-zinc-500">TxHash/Proof:</span>{' '}
+                            <strong className="text-cyan-300">{pay.proofTxHash || 'Unspecified'}</strong>
+                          </div>
+                          <div className="truncate">
+                            <span className="text-zinc-500">User Wallet:</span>{' '}
+                            <strong className="text-zinc-200">{pay.walletAddress || 'Unspecified'}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION B: GENERAL IB APPLICATIONS REVIEW */}
+              <div className="space-y-3 pt-4 border-t border-zinc-800/80">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h4 className="text-sm font-bold text-zinc-200 flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-cyan-400" />
+                      <span>General IB Credentials Applications</span>
+                    </h4>
+                    <p className="text-xs text-zinc-400 font-mono">Review applicant background and grant 10% IB Partner status.</p>
+                  </div>
+                </div>
+
+              {ibApplications.length === 0 ? (
+                <div className="p-8 text-center bg-zinc-950/50 rounded-xl border border-zinc-800 text-zinc-500 font-mono text-xs">
+                  No IB applications found in queue.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {ibApplications.map((appItem) => (
+                    <div key={appItem.id} className="bg-zinc-950 p-5 rounded-2xl border border-zinc-800 font-mono text-xs space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-sm">{appItem.userName}</span>
+                            <span className="text-cyan-400">({appItem.userEmail})</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              appItem.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
+                              appItem.status === 'REJECTED' ? 'bg-red-500/10 text-red-400 border border-red-500/30' :
+                              'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                            }`}>
+                              {appItem.status}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-zinc-500">Submitted: {new Date(appItem.createdAt).toLocaleString()}</span>
+                        </div>
+
+                        {appItem.status === 'PENDING' && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleRejectIb(appItem.id)}
+                              className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 font-semibold text-xs transition-colors flex items-center gap-1"
+                            >
+                              <Ban className="w-3.5 h-3.5" />
+                              <span>Reject</span>
+                            </button>
+                            <button
+                              onClick={() => handleApproveIb(appItem.id)}
+                              className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:brightness-110 text-black font-extrabold text-xs transition-all flex items-center gap-1 shadow-md shadow-cyan-500/20"
+                            >
+                              <Check className="w-3.5 h-3.5 stroke-[3]" />
+                              <span>Approve IB (10% Rate)</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-zinc-300">
+                        <div className="flex items-center gap-1.5 text-zinc-400">
+                          <Phone className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <span>Phone: {appItem.phone}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-zinc-400">
+                          <Globe className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <span>Country: {appItem.country}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-zinc-400">
+                          <MessageSquare className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <span>Contact: {appItem.telegramWhatsapp}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-zinc-900/60 rounded-xl border border-zinc-800 text-[11px] text-zinc-300">
+                        <span className="text-zinc-500 font-bold uppercase block text-[9px] mb-1">Network & Brokerage Experience:</span>
+                        <p className="leading-relaxed font-sans text-xs text-zinc-300">{appItem.experience}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              </div>
+            </div>
+          )}
+
+          {adminTab === 'IB_APPLICATIONS' && (
+            <div className="space-y-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-cyan-400" />
+                    <span>IB Applications Log (New & Existing Users)</span>
+                  </h4>
+                  <p className="text-xs text-zinc-400 mt-0.5 font-mono">
+                    Real-time verification queue for IB partner program submissions.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search application..."
+                      value={ibAppSearch}
+                      onChange={(e) => setIbAppSearch(e.target.value)}
+                      className="bg-zinc-900 border border-zinc-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-400 font-mono w-44"
+                    />
+                  </div>
+
+                  {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setIbAppFilter(st)}
+                      className={`px-3 py-1.5 rounded-lg border transition-all cursor-pointer ${
+                        ibAppFilter === st
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 font-bold'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-white'
+                      }`}
+                    >
+                      {st} {st === 'PENDING' && `(${ibApplications.filter(a => a.status === 'PENDING').length})`}
+                    </button>
+                  ))}
+
+                  <button
+                    onClick={fetchIbData}
+                    className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-all cursor-pointer"
+                    title="Refresh Applications"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${loadingIbApps ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {actionSuccessMsg && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs font-mono flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    {actionSuccessMsg}
+                  </span>
+                  <button onClick={() => setActionSuccessMsg(null)} className="text-zinc-500 hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {ibApplications
+                .filter(a => {
+                  if (ibAppFilter !== 'ALL' && a.status !== ibAppFilter) return false;
+                  if (ibAppSearch.trim()) {
+                    const q = ibAppSearch.toLowerCase();
+                    return (
+                      a.userName.toLowerCase().includes(q) ||
+                      a.userEmail.toLowerCase().includes(q) ||
+                      a.phone.toLowerCase().includes(q) ||
+                      a.country.toLowerCase().includes(q)
+                    );
+                  }
+                  return true;
+                }).length === 0 ? (
+                <div className="p-10 text-center bg-zinc-950/50 rounded-xl border border-zinc-800 text-zinc-500 font-mono text-xs space-y-2">
+                  <Briefcase className="w-8 h-8 mx-auto text-zinc-600 mb-2" />
+                  <p className="font-bold text-zinc-400">No IB applications found.</p>
+                  <p className="text-zinc-600">Applications submitted by users for the IB Partner program will appear here.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-zinc-800 bg-zinc-950 shadow-xl">
+                  <table className="w-full text-left font-mono text-xs text-zinc-300">
+                    <thead className="bg-zinc-900/90 text-zinc-400 uppercase text-[10px] tracking-wider border-b border-zinc-800">
+                      <tr>
+                        <th className="py-3.5 px-4 font-bold">Date</th>
+                        <th className="py-3.5 px-4 font-bold">Full Name</th>
+                        <th className="py-3.5 px-4 font-bold">Email</th>
+                        <th className="py-3.5 px-4 font-bold">Country</th>
+                        <th className="py-3.5 px-4 font-bold">Phone Number</th>
+                        <th className="py-3.5 px-4 font-bold">Status</th>
+                        <th className="py-3.5 px-4 font-bold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/60">
+                      {ibApplications
+                        .filter(a => {
+                          if (ibAppFilter !== 'ALL' && a.status !== ibAppFilter) return false;
+                          if (ibAppSearch.trim()) {
+                            const q = ibAppSearch.toLowerCase();
+                            return (
+                              a.userName.toLowerCase().includes(q) ||
+                              a.userEmail.toLowerCase().includes(q) ||
+                              a.phone.toLowerCase().includes(q) ||
+                              a.country.toLowerCase().includes(q)
+                            );
+                          }
+                          return true;
+                        })
+                        .map((appItem) => (
+                          <tr key={appItem.id} className="hover:bg-zinc-900/40 transition-colors">
+                            <td className="py-3.5 px-4 whitespace-nowrap text-zinc-400 text-[11px]">
+                              {new Date(appItem.createdAt).toLocaleDateString()} {new Date(appItem.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td className="py-3.5 px-4 font-bold text-white whitespace-nowrap">
+                              {appItem.userName}
+                            </td>
+                            <td className="py-3.5 px-4 text-cyan-400 whitespace-nowrap">
+                              {appItem.userEmail}
+                            </td>
+                            <td className="py-3.5 px-4 text-zinc-300 whitespace-nowrap">
+                              {appItem.country}
+                            </td>
+                            <td className="py-3.5 px-4 text-zinc-300 whitespace-nowrap">
+                              {appItem.phone}
+                            </td>
+                            <td className="py-3.5 px-4 whitespace-nowrap">
+                              <span className={`px-2.5 py-1 rounded text-[10px] font-bold ${
+                                appItem.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
+                                appItem.status === 'REJECTED' ? 'bg-red-500/10 text-red-400 border border-red-500/30' :
+                                'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                              }`}>
+                                {appItem.status}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                              {appItem.status === 'PENDING' ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <button
+                                    onClick={() => handleApproveIb(appItem.id)}
+                                    className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-teal-500 hover:brightness-110 text-black font-extrabold text-xs transition-all flex items-center gap-1 shadow-md shadow-cyan-500/20 cursor-pointer"
+                                  >
+                                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                    <span>APPROVE</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectIb(appItem.id)}
+                                    className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 font-semibold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                    <span>REJECT</span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-zinc-500 font-bold uppercase">{appItem.status}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {adminTab === 'INTERNAL_TRANSFER' && (
+            <InternalTransferPanel 
+              users={users} 
+              preSelectedUser={preSelectedUserForTransfer}
+              onRefreshData={onRefreshData}
+            />
+          )}
+        </div>
+
+        {/* Change Password Modal */}
+        {editingPasswordUser && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+            <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl text-white space-y-4 font-mono">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold shrink-0">
+                    <KeyRound className="w-5 h-5" />
+                  </div>
+                  <div className="overflow-hidden">
+                    <h4 className="text-sm font-bold text-white">Change User Password</h4>
+                    <p className="text-xs text-zinc-400 truncate">{editingPasswordUser.email}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setEditingPasswordUser(null)}
+                  className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {passwordChangeError && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+                  {passwordChangeError}
+                </div>
+              )}
+
+              {passwordChangeSuccess && (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-center gap-2">
+                  <Check className="w-4 h-4" />
+                  {passwordChangeSuccess}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300">New Account Password</label>
+                <input
+                  type="text"
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  placeholder="Enter new user password..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-amber-300 focus:outline-none focus:border-amber-500 font-mono"
+                  autoFocus
+                />
+                <p className="text-[10px] text-zinc-500">
+                  Updating this password will allow the user to log in with this new credential immediately.
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingPasswordUser(null)}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingPassword || !newPasswordInput.trim()}
+                  onClick={handleSaveNewPassword}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {isSavingPassword ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Update Password</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
+      </div>
+    </div>
+  );
+};

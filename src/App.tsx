@@ -218,11 +218,15 @@ export default function App() {
         const prevProfitBN = new BigNumber(prevUser.dailyProfit || '0');
         const baselineBN = BigNumber.max(prevEarnedBN, prevProfitBN);
 
-        // Strict monotonic sequential progression: each second ticks forward by exact yieldPerSec minimum without jumping down or resetting
-        let newEarnedBN = BigNumber.max(
-          yieldRes.accumulatedProfit,
-          baselineBN.plus(yieldPerSec)
-        );
+        // Strict monotonic sequential progression: each second ticks forward continuously by exact yieldPerSec without jumping or erratic leaps
+        let newEarnedBN: BigNumber;
+        if (baselineBN.isGreaterThan(0)) {
+          newEarnedBN = baselineBN.plus(yieldPerSec);
+        } else if (yieldRes.accumulatedProfit.isGreaterThan(0)) {
+          newEarnedBN = yieldRes.accumulatedProfit;
+        } else {
+          newEarnedBN = yieldPerSec;
+        }
 
         // Monotonic sequence: yield ticks up incrementally second by second
         const newEarnedStr = newEarnedBN.toFixed(18);

@@ -203,14 +203,14 @@ export const DollarCraftDashboard: React.FC<DollarCraftDashboardProps> = ({
         let intBN = new BigNumber(parts[0] || "680364542");
         let fracBN = new BigNumber("0." + (parts[1] || "0000"));
 
-        // Micro-tick random increment per 60ms cycle
-        const randomDelta = (Math.random() * 0.0014 + 0.0018).toFixed(6);
+        // Micro-tick continuous fractional increment per 60ms cycle
+        const randomDelta = (Math.random() * 0.0003 + 0.0002).toFixed(6);
         const microIncrement = new BigNumber(randomDelta);
         let nextFrac = fracBN.plus(microIncrement);
 
-        if (nextFrac.gte(new BigNumber("0.5000"))) {
-          intBN = intBN.plus(5);
-          nextFrac = nextFrac.minus(new BigNumber("0.5000"));
+        if (nextFrac.gte(new BigNumber("1.0000"))) {
+          intBN = intBN.plus(1);
+          nextFrac = nextFrac.minus(new BigNumber("1.0000"));
         }
 
         const formattedFrac = nextFrac.toFixed(4).split(".")[1] || "0000";
@@ -222,13 +222,13 @@ export const DollarCraftDashboard: React.FC<DollarCraftDashboardProps> = ({
         let intBN = new BigNumber(parts[0] || "45892301");
         let fracBN = new BigNumber("0." + (parts[1] || "0000"));
 
-        const randomDelta = (Math.random() * 0.0010 + 0.0012).toFixed(6);
+        const randomDelta = (Math.random() * 0.0002 + 0.0001).toFixed(6);
         const microIncrement = new BigNumber(randomDelta);
         let nextFrac = fracBN.plus(microIncrement);
 
-        if (nextFrac.gte(new BigNumber("0.5000"))) {
-          intBN = intBN.plus(5);
-          nextFrac = nextFrac.minus(new BigNumber("0.5000"));
+        if (nextFrac.gte(new BigNumber("1.0000"))) {
+          intBN = intBN.plus(1);
+          nextFrac = nextFrac.minus(new BigNumber("1.0000"));
         }
 
         const formattedFrac = nextFrac.toFixed(4).split(".")[1] || "0000";

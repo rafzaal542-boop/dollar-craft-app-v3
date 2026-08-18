@@ -341,17 +341,13 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
     (canonicalUser as any).totalBalance = Math.max(0, canonPBalNum + canonEarnedNum);
   }
 
-  // Anchor depositStartTime to the immutable earliest creation / deposit timestamp
+  // Anchor depositStartTime to the true deposit activation timestamp
   const nowSecForConsolidation = Math.floor(Date.now() / 1000);
   const startCandidates: number[] = [];
   matching.forEach((u) => {
     if (u.depositStartTime && Number(u.depositStartTime) > 0) {
       const s = Number(u.depositStartTime) > 100000000000 ? Math.floor(Number(u.depositStartTime) / 1000) : Math.floor(Number(u.depositStartTime));
       if (s <= nowSecForConsolidation) startCandidates.push(s);
-    }
-    if (u.createdAt) {
-      const t = new Date(u.createdAt).getTime();
-      if (!isNaN(t) && t > 0 && Math.floor(t / 1000) <= nowSecForConsolidation) startCandidates.push(Math.floor(t / 1000));
     }
     if (u.activeInvestment?.depositStartTime && Number(u.activeInvestment.depositStartTime) > 0) {
       const s = Number(u.activeInvestment.depositStartTime) > 100000000000 ? Math.floor(Number(u.activeInvestment.depositStartTime) / 1000) : Math.floor(Number(u.activeInvestment.depositStartTime));
@@ -650,17 +646,9 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
         const s = Number(canonicalUser.depositStartTime) > 100000000000 ? Math.floor(Number(canonicalUser.depositStartTime) / 1000) : Math.floor(Number(canonicalUser.depositStartTime));
         if (s <= nowSecForSync) startCandidates.push(s);
       }
-      if (canonicalUser.createdAt) {
-        const t = new Date(canonicalUser.createdAt).getTime();
-        if (!isNaN(t) && t > 0 && Math.floor(t / 1000) <= nowSecForSync) startCandidates.push(Math.floor(t / 1000));
-      }
       if (userDocData?.depositStartTime && Number(userDocData.depositStartTime) > 0) {
         const s = Number(userDocData.depositStartTime) > 100000000000 ? Math.floor(Number(userDocData.depositStartTime) / 1000) : Math.floor(Number(userDocData.depositStartTime));
         if (s <= nowSecForSync) startCandidates.push(s);
-      }
-      if (userDocData?.createdAt) {
-        const t = new Date(userDocData.createdAt).getTime();
-        if (!isNaN(t) && t > 0 && Math.floor(t / 1000) <= nowSecForSync) startCandidates.push(Math.floor(t / 1000));
       }
       const canonicalStartSec = startCandidates.length > 0 ? Math.min(...startCandidates) : nowSecForSync;
       canonicalUser.depositStartTime = canonicalStartSec;
@@ -1268,9 +1256,9 @@ function reconcileOfflineYields(): { totalOfflineYieldCredited: string; elapsedS
         const s = Number(user.depositStartTime) > 100000000000 ? Math.floor(Number(user.depositStartTime) / 1000) : Math.floor(Number(user.depositStartTime));
         if (s <= nowSec) startCandidates.push(s);
       }
-      if (user.createdAt) {
-        const t = new Date(user.createdAt).getTime();
-        if (!isNaN(t) && t > 0 && Math.floor(t / 1000) <= nowSec) startCandidates.push(Math.floor(t / 1000));
+      if (user.activeInvestment?.depositStartTime && Number(user.activeInvestment.depositStartTime) > 0) {
+        const s = Number(user.activeInvestment.depositStartTime) > 100000000000 ? Math.floor(Number(user.activeInvestment.depositStartTime) / 1000) : Math.floor(Number(user.activeInvestment.depositStartTime));
+        if (s <= nowSec) startCandidates.push(s);
       }
       userDeps.forEach((d) => {
         if (d.startTime) {
@@ -1285,13 +1273,8 @@ function reconcileOfflineYields(): { totalOfflineYieldCredited: string; elapsedS
       const ratePerSec = new BigNumber(totalDepNum).multipliedBy(new BigNumber(monthlyRate).dividedBy(30).dividedBy(100).dividedBy(86400));
       const elapsed = Math.max(0, nowSec - depStartSec);
       const accrued = ratePerSec.multipliedBy(elapsed);
-      const baseBN = new BigNumber(baseYieldStr || '0');
       
-      let currentYieldBN = BigNumber.max(0, baseBN.plus(accrued));
-      if (baseBN.isZero()) {
-        currentYieldBN = BigNumber.max(0, accrued.minus(totalWithdrawnBN));
-      }
-
+      const currentYieldBN = BigNumber.max(0, accrued.minus(totalWithdrawnBN));
       const prevEarnedBN = new BigNumber(user.earnedYield || '0');
       const prevProfitBN = new BigNumber(user.dailyProfit || '0');
       const finalYieldBN = BigNumber.max(currentYieldBN, prevEarnedBN, prevProfitBN);

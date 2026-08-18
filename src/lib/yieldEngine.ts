@@ -79,28 +79,19 @@ export function calculateServerTimestampYield(
   }
   const elapsedSeconds = Math.max(0, currSec - startSec);
 
-  const accruedYield = yieldPerSec.multipliedBy(elapsedSeconds);
+  const grossYield = yieldPerSec.multipliedBy(elapsedSeconds);
   const withdrawnBN = new BigNumber(totalWithdrawn || 0);
   
-  // Base earned yield is the starting net profit anchor at startSec.
-  // Continuous accumulated profit = baseEarnedYield + accruedYieldSinceAnchor
-  let accumulatedProfit = BigNumber.max(0, baseBN.plus(accruedYield));
-
-  // If baseEarnedYield is 0 or uninitialized, or if startSec is deposit inception time, subtract totalWithdrawn
-  if (baseBN.isZero()) {
-    accumulatedProfit = BigNumber.max(0, accruedYield.minus(withdrawnBN));
-  } else if (withdrawnBN.isGreaterThan(0) && baseBN.isGreaterThan(accruedYield) && accruedYield.isGreaterThan(0)) {
-    // If baseBN is greater than zero, ensure it doesn't double-count if totalWithdrawn was already deducted
-    accumulatedProfit = BigNumber.max(0, baseBN.plus(accruedYield));
-  }
+  // Continuous accumulated profit = (ElapsedSeconds * YieldPerSec) - TotalWithdrawn
+  const accumulatedProfit = BigNumber.max(0, grossYield.minus(withdrawnBN));
 
   // DisplayBalance = InitialDeposit + AccumulatedProfit
   const displayBalance = BigNumber.max(0, depositBN.plus(accumulatedProfit));
 
   return {
     accumulatedProfit,
-    accruedYield,
-    grossYield: BigNumber.max(0, accruedYield),
+    accruedYield: grossYield,
+    grossYield,
     netYield: accumulatedProfit,
     displayBalance,
     elapsedSeconds,
@@ -307,8 +298,6 @@ export function resolveCanonicalDepositStartTime(
 
   if (user) {
     addCandidate(user.depositStartTime);
-    addCandidate(user.createdAt);
-    addCandidate(user.joinedDate);
     if (user.activeInvestment) {
       addCandidate(user.activeInvestment.depositStartTime);
       addCandidate(user.activeInvestment.activationTimestamp);
@@ -324,7 +313,7 @@ export function resolveCanonicalDepositStartTime(
     deposits.forEach((d) => {
       if (d) {
         addCandidate(d.startTime);
-        addCandidate((d as any).createdAt);
+        addCandidate((d as any).depositStartTime);
       }
     });
   }

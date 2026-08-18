@@ -315,6 +315,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
   const getLiveAccruedDailyProfit = (): string => {
     if (!currentUser) return '0.000000';
+    const totalDep = parseFloat(getCalculatedTotalDeposit()) || 0;
+    if (totalDep <= 0) return '0.000000';
 
     // High-precision realtime yield (earnedYield is cumulative net earned profit)
     const earnedYieldNum = parseFloat(currentUser.earnedYield || '0') || 0;
@@ -511,8 +513,10 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                   TICKING LIVE
                 </span>
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all">
-                ${getLiveAccruedDailyProfit()}
+              <div className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all flex items-baseline">
+                <span>$</span>
+                <span>{getLiveAccruedDailyProfit().split('.')[0]}</span>
+                <span className="text-amber-400 text-2xl sm:text-3xl">.{getLiveAccruedDailyProfit().split('.')[1] || '000000'}</span>
               </div>
               <div className="text-xs font-mono text-slate-400 flex items-center justify-between pt-2 border-t border-slate-800/80">
                 <span className="flex items-center gap-1 text-slate-400">

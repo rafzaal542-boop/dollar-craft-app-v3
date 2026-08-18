@@ -10,6 +10,13 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+// Explicit Web App Manifest Endpoints for SEO & PWA
+app.get(['/manifest.json', '/site.webmanifest'], (_req: Request, res: Response) => {
+  res.header('Content-Type', 'application/manifest+json; charset=utf-8');
+  res.sendFile(path.join(process.cwd(), 'public', 'manifest.json'));
+});
 
 let isFirestoreQuotaExceeded = false;
 let quotaResetTimer: NodeJS.Timeout | null = null;

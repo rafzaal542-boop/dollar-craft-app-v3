@@ -22,6 +22,41 @@ export const ContactModal: React.FC<ContactModalProps> = ({
     setTimeout(() => setCopied(false), 2500);
   };
 
+  const handleOpenEmail = (e: React.MouseEvent) => {
+    // Universal trigger for PC and Mobile
+    const emailTo = 'dollarcraft3@gmail.com';
+    const subject = encodeURIComponent('Dollar Craft Official 24/7 Support Inquiry');
+    const body = encodeURIComponent('Hello Dollar Craft Support Team,\n\nI need assistance with:\n- Account Email:\n- Inquiry Details:\n\nThank you.');
+
+    // Copy to clipboard as quick assistance
+    try {
+      navigator.clipboard.writeText(emailTo);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    } catch (err) {}
+
+    // Check if on PC or Mobile
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    if (isMobile) {
+      // Mobile native client launch
+      window.location.href = `mailto:${emailTo}?subject=${subject}&body=${body}`;
+    } else {
+      // PC: Open Gmail Web Composer directly in new tab (guaranteed to work on PC without desktop email client installed)
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${emailTo}&su=${subject}&body=${body}`;
+      window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+      
+      // Fallback: Also invoke mailto iframe silently
+      try {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = `mailto:${emailTo}?subject=${subject}&body=${body}`;
+        document.body.appendChild(iframe);
+        setTimeout(() => document.body.removeChild(iframe), 2000);
+      } catch (err) {}
+    }
+  };
+
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-50 overflow-y-auto overflow-x-hidden bg-black/85 backdrop-blur-md p-2 sm:p-4 w-full max-w-full flex items-center justify-center">
@@ -110,14 +145,15 @@ export const ContactModal: React.FC<ContactModalProps> = ({
                     <span>24/7 LIVE</span>
                   </div>
 
-                  <a
-                    href="mailto:dollarcraft3@gmail.com?subject=Dollar%20Craft%20Official%2024%2F7%20Support%20Inquiry"
+                  <button
+                    type="button"
+                    onClick={handleOpenEmail}
                     className="px-3.5 py-2 bg-gradient-to-r from-cyan-500 via-teal-500 to-emerald-500 hover:from-cyan-400 hover:to-teal-400 text-slate-950 font-black rounded-xl text-xs font-mono flex items-center gap-2 shadow-md shadow-cyan-500/25 transition-all cursor-pointer hover:scale-[1.03] active:scale-[0.98]"
                   >
                     <EmailLogo className="w-4 h-4 shrink-0" />
                     <span className="uppercase tracking-wide">Email Support 24/7</span>
                     <ExternalLink className="w-3 h-3 stroke-[2.5]" />
-                  </a>
+                  </button>
                 </div>
               </div>
 

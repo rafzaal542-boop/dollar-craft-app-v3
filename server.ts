@@ -534,17 +534,6 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
         mergedYieldBN = inMemYield;
       }
 
-      if (cleanEmail === 'abdulha@gmail.com') {
-        canonicalUser.principalBalance = '5000.000000000000000000';
-        (canonicalUser as any).totalDeposit = 5000;
-        canonicalUser.totalWithdrawn = '100.000000000000000000';
-        if (mergedYieldBN.isGreaterThan(150) || mergedYieldBN.isLessThan(6.5)) {
-          mergedYieldBN = new BigNumber('7.000000000000000000');
-          userDocData.baseEarnedYield = '7.000000000000000000';
-          userDocData.depositStartTime = Math.floor(Date.now() / 1000);
-        }
-      }
-
       canonicalUser.earnedYield = mergedYieldBN.toFixed(18);
       canonicalUser.dailyProfit = mergedYieldBN.toNumber();
 

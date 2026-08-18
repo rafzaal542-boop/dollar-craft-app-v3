@@ -374,7 +374,12 @@ export default function App() {
               fsWithdrawn
             );
 
-            const finalYieldBN = yieldRes.accumulatedProfit;
+            const docYieldBN = new BigNumber(d.earnedYield !== undefined ? d.earnedYield : (d.dailyProfit || '0'));
+            const prevEarnedBN = new BigNumber(prevUser.earnedYield || '0');
+            const prevProfitBN = new BigNumber(prevUser.dailyProfit || '0');
+            const calculatedProfitBN = yieldRes.accumulatedProfit;
+
+            const finalYieldBN = BigNumber.max(docYieldBN, prevEarnedBN, prevProfitBN, calculatedProfitBN);
             const fsYieldStr = finalYieldBN.toFixed(18);
 
             const computedTotalBal = d.totalBalance !== undefined && Number(d.totalBalance) > 0
@@ -756,7 +761,12 @@ export default function App() {
               maxWithdrawnBN
             );
 
-            const finalYieldBN = yieldRes.accumulatedProfit;
+            const serverYieldBN = new BigNumber(data.user.earnedYield !== undefined ? data.user.earnedYield : (data.user.dailyProfit || '0'));
+            const prevYieldBN = new BigNumber(prevUser.earnedYield || '0');
+            const prevProfitBN = new BigNumber(prevUser.dailyProfit || '0');
+            const calculatedProfitBN = yieldRes.accumulatedProfit;
+
+            const finalYieldBN = BigNumber.max(serverYieldBN, prevYieldBN, prevProfitBN, calculatedProfitBN);
             const finalYieldStr = finalYieldBN.toFixed(18);
             const totalBalNum = Math.max(0, totalDepNum + finalYieldBN.toNumber());
 

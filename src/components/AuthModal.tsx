@@ -193,7 +193,7 @@ export const lookupUserInFirestore = async (
       totalDeposit: totalDepNum,
       totalBalance: totalBalNum,
       dailyProfit: Number(foundData.dailyProfit ?? 0),
-      depositStartTime: foundData.depositStartTime || 0,
+      depositStartTime: foundData.depositStartTime || (foundData.createdAt ? Math.floor(new Date(foundData.createdAt).getTime() / 1000) : undefined),
       baseEarnedYield: String(foundData.baseEarnedYield ?? '0.000000000000000000'),
       referralCode: foundData.referralCode || cleanEmail.split('@')[0].toUpperCase(),
       referredBy: foundData.referredBy || foundData.referredByCode || undefined,

@@ -1,4 +1,5 @@
 import BigNumber from 'bignumber.js';
+import { User, ActiveInvestment, UserDeposit } from '../types';
 
 // Configure BigNumber for extreme financial precision (18 decimal places, explicit ROUND_DOWN for safety)
 BigNumber.config({
@@ -206,10 +207,8 @@ export function formatPrecision(
  */
 export function formatCurrency(val: string | number | BigNumber): string {
   const bn = new BigNumber(val || 0);
-  return `$${bn.toFormat(2, BigNumber.ROUND_DOWN)}`;
+  return `${bn.toFormat(2, BigNumber.ROUND_DOWN)}`;
 }
-
-import { User, ActiveInvestment } from '../types';
 
 /**
  * Returns exact rate tier parameters based on investment amount or plan name
@@ -277,6 +276,66 @@ export function getPlanRates(amountOrPlan: number | string): {
 /**
  * Calculates exact timestamp-based elapsed yield accrued while offline / page closed
  */
+export function resolveCanonicalDepositStartTime(
+  user?: Partial<User> | null,
+  activeInvestment?: Partial<ActiveInvestment> | null,
+  deposits?: Array<Partial<UserDeposit>> | null
+): number {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const candidates: number[] = [];
+
+  const addCandidate = (val: any) => {
+    if (!val) return;
+    let sec = 0;
+    if (typeof val === 'number') {
+      sec = val > 100000000000 ? Math.floor(val / 1000) : Math.floor(val);
+    } else if (typeof val === 'string') {
+      const num = Number(val);
+      if (!isNaN(num) && num > 0) {
+        sec = num > 100000000000 ? Math.floor(num / 1000) : Math.floor(num);
+      } else {
+        const parsed = new Date(val).getTime();
+        if (!isNaN(parsed) && parsed > 0) {
+          sec = Math.floor(parsed / 1000);
+        }
+      }
+    }
+    if (sec > 0 && sec <= nowSec) {
+      candidates.push(sec);
+    }
+  };
+
+  if (user) {
+    addCandidate(user.depositStartTime);
+    addCandidate(user.createdAt);
+    addCandidate(user.joinedDate);
+    if (user.activeInvestment) {
+      addCandidate(user.activeInvestment.depositStartTime);
+      addCandidate(user.activeInvestment.activationTimestamp);
+    }
+  }
+
+  if (activeInvestment) {
+    addCandidate(activeInvestment.depositStartTime);
+    addCandidate(activeInvestment.activationTimestamp);
+  }
+
+  if (Array.isArray(deposits)) {
+    deposits.forEach((d) => {
+      if (d) {
+        addCandidate(d.startTime);
+        addCandidate((d as any).createdAt);
+      }
+    });
+  }
+
+  if (candidates.length > 0) {
+    return Math.min(...candidates);
+  }
+
+  return nowSec;
+}
+
 export function reconcileUserOfflineYield(
   user: User,
   activeInvestment: ActiveInvestment | null | undefined
@@ -346,8 +405,11 @@ export function reconcileUserOfflineYield(
       totalDeposit: 0,
       principalBalance: '0.000000000000000000',
       earnedYield: '0.000000000000000000',
+      dailyProfit: 0,
       totalBalance: 0,
-      activeInvestment: null
+      activeInvestment: null,
+      depositStartTime: 0,
+      baseEarnedYield: '0.000000000000000000'
     };
 
     return {
@@ -386,41 +448,10 @@ export function reconcileUserOfflineYield(
     };
   }
 
-  // Determine depositStartTime & baseEarnedYield (anchors for deterministic yield calculation)
+  // Determine depositStartTime & baseEarnedYield (immutable earliest anchor)
   const nowSec = Math.floor(now / 1000);
-  let parsedCreatedSec = 0;
-  if (user.createdAt) {
-    const t = new Date(user.createdAt).getTime();
-    if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
-  } else if (user.joinedDate) {
-    const t = new Date(user.joinedDate).getTime();
-    if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
-  }
-
-  let depositStartSec = user.depositStartTime || (inv?.depositStartTime ? Math.floor(inv.depositStartTime) : (inv?.activationTimestamp ? Math.floor(inv.activationTimestamp / 1000) : parsedCreatedSec));
-  if (depositStartSec > 100000000000) {
-    depositStartSec = Math.floor(depositStartSec / 1000);
-  }
-  let baseYieldStr = user.baseEarnedYield;
-
-  const uEmailClean = (user.email || '').toLowerCase().trim();
-  const withdrawnVal = parseFloat(user.totalWithdrawn || '0') || 0;
-
-  if (!depositStartSec || depositStartSec <= 0 || depositStartSec > nowSec) {
-    depositStartSec = parsedCreatedSec > 0 && parsedCreatedSec <= nowSec ? parsedCreatedSec : nowSec;
-    baseYieldStr = '0.000000000000000000';
-  } else if (baseYieldStr === undefined || baseYieldStr === null || baseYieldStr === '') {
-    baseYieldStr = '0.000000000000000000';
-  }
-
-  // Universal calculation for all users:
-  // If depositStartSec is the original deposit inception time, baseYield is 0 and totalWithdrawn is deducted from gross yield.
-  // If depositStartSec is anchored at a post-withdrawal timestamp, baseYield is the net starting balance at that anchor.
-  const isOriginalStart = parsedCreatedSec > 0 && Math.abs(depositStartSec - parsedCreatedSec) < 3600;
-  if (isOriginalStart && withdrawnVal > 0 && parseFloat(baseYieldStr || '0') <= 0) {
-    baseYieldStr = '0.000000000000000000';
-    depositStartSec = parsedCreatedSec;
-  }
+  const depositStartSec = resolveCanonicalDepositStartTime(user, inv);
+  let baseYieldStr = user.baseEarnedYield || '0.000000000000000000';
 
   const monthlyRate = inv.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
   const yieldRes = calculateServerTimestampYield(
@@ -432,7 +463,9 @@ export function reconcileUserOfflineYield(
     user.totalWithdrawn || '0'
   );
 
-  const newEarnedBN = yieldRes.accumulatedProfit;
+  const prevEarnedBN = new BigNumber(user.earnedYield || '0');
+  const prevProfitBN = new BigNumber(user.dailyProfit || '0');
+  const newEarnedBN = BigNumber.max(yieldRes.accumulatedProfit, prevEarnedBN, prevProfitBN);
 
   const updatedInv: ActiveInvestment = {
     ...inv,

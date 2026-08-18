@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { User, UserDeposit, Transaction, ReferralReward, SystemMetrics, InvestmentPlan, ActiveInvestment } from './types';
-import { BigNumber, formatCurrency, formatPrecision, calculateMicroYield, calculateYieldPerSecond, calculateServerTimestampYield, getPlanRates, reconcileUserOfflineYield } from './lib/yieldEngine';
+import { BigNumber, formatCurrency, formatPrecision, calculateMicroYield, calculateYieldPerSecond, calculateServerTimestampYield, getPlanRates, reconcileUserOfflineYield, resolveCanonicalDepositStartTime } from './lib/yieldEngine';
 import { Header } from './components/Header';
 import { LiveBalanceTicker } from './components/LiveBalanceTicker';
 import { ActiveCyclesTable } from './components/ActiveCyclesTable';
@@ -172,6 +172,8 @@ export default function App() {
           if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
         }
 
+        const canonicalDepositStart = resolveCanonicalDepositStartTime(prevUser, currentInv, deposits);
+
         if (!currentInv && effectiveInvAmt > 0) {
           const rates = getPlanRates(effectiveInvAmt);
           currentInv = {
@@ -182,7 +184,7 @@ export default function App() {
             monthlyYieldPercent: rates.monthlyYieldPercent,
             activationTimestamp: nowMs,
             lastCalculatedTimestamp: nowMs,
-            depositStartTime: prevUser.depositStartTime || parsedCreatedSec || nowSec
+            depositStartTime: canonicalDepositStart
           };
           setActiveInvestment(currentInv);
         }
@@ -195,14 +197,10 @@ export default function App() {
           return prevUser;
         }
 
-        // Server-Timestamp Based Accrual Engine Calculation
-        let depositStartSec = prevUser.depositStartTime || (currentInv.depositStartTime ? Math.floor(currentInv.depositStartTime) : (parsedCreatedSec || nowSec));
+        // Server-Timestamp Based Accrual Engine Calculation (Anchored to canonical immutable deposit start)
+        const depositStartSec = canonicalDepositStart;
         let baseYieldStr = prevUser.baseEarnedYield || '0.000000000000000000';
         const totalWithdrawnVal = prevUser.totalWithdrawn || '0';
-
-        if (!depositStartSec || depositStartSec <= 0) {
-          depositStartSec = parsedCreatedSec || nowSec;
-        }
 
         const monthlyYieldPercent = currentInv.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
 
@@ -341,24 +339,17 @@ export default function App() {
             const effectiveBalNum = effectiveBalBN.toNumber();
             const effectiveDepNum = effectiveDepBN.toNumber();
 
-            let parsedCreatedSec = 0;
-            if (d.createdAt) {
-              const t = new Date(d.createdAt).getTime();
-              if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
-            }
-            const fsDepositStart = d.depositStartTime || (d.activeInvestment?.depositStartTime ? Math.floor(d.activeInvestment.depositStartTime) : (d.activeInvestment?.activationTimestamp ? Math.floor(d.activeInvestment.activationTimestamp / 1000) : parsedCreatedSec));
+            const effectiveDepositStart = resolveCanonicalDepositStartTime(
+              { ...prevUser, ...d },
+              d.activeInvestment || prevUser.activeInvestment,
+              deposits
+            );
             let fsBaseYield = d.baseEarnedYield !== undefined && d.baseEarnedYield !== null
               ? String(d.baseEarnedYield)
               : (prevUser.baseEarnedYield || '0.000000000000000000');
 
             const nowSec = Math.floor(Date.now() / 1000);
             const fsWithdrawn = d.totalWithdrawn !== undefined ? String(d.totalWithdrawn) : (prevUser.totalWithdrawn || '0');
-            const isZeroWd = parseFloat(fsWithdrawn) === 0;
-
-            let effectiveDepositStart = prevUser.depositStartTime || fsDepositStart || parsedCreatedSec || nowSec;
-            if (effectiveDepositStart > nowSec) {
-              effectiveDepositStart = nowSec;
-            }
 
             if (!d.depositStartTime && cleanEmail) {
               import('./lib/firebase').then(({ db, isClientFirestoreQuotaExceeded }) => {
@@ -753,16 +744,11 @@ export default function App() {
               ? Number(data.user.totalBalance)
               : Math.max(0, totalDepNum + finalYieldBN.toNumber());
 
-            const nowSec = Math.floor(Date.now() / 1000);
-            let parsedCreatedSec = 0;
-            if (data.user.createdAt) {
-              const t = new Date(data.user.createdAt).getTime();
-              if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
-            }
-
-            let effDepositStart = (data.user.depositStartTime && data.user.depositStartTime > 0 && data.user.depositStartTime <= nowSec)
-              ? data.user.depositStartTime
-              : (prevUser.depositStartTime && prevUser.depositStartTime > 0 && prevUser.depositStartTime <= nowSec ? prevUser.depositStartTime : (parsedCreatedSec || nowSec));
+            const effDepositStart = resolveCanonicalDepositStartTime(
+              { ...prevUser, ...data.user },
+              data.user.activeInvestment || prevUser.activeInvestment,
+              data.deposits || deposits
+            );
 
             const effBaseYield = data.user.baseEarnedYield || prevUser.baseEarnedYield || '0.000000000000000000';
 

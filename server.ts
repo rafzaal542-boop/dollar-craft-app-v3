@@ -345,7 +345,9 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
   };
 
   matching.forEach((u) => {
+    addStartCand(u.depositTimestamp);
     addStartCand(u.depositStartTime);
+    addStartCand(u.activeInvestment?.depositTimestamp);
     addStartCand(u.activeInvestment?.depositStartTime);
     addStartCand(u.activeInvestment?.activationTimestamp);
     addStartCand(u.createdAt);
@@ -356,12 +358,14 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
   userDeps.forEach((d) => {
     addStartCand(d.startTime);
     addStartCand((d as any).depositStartTime);
+    addStartCand((d as any).depositTimestamp);
     addStartCand((d as any).createdAt);
   });
 
   userITX.forEach((itx) => {
     addStartCand(itx.createdAt);
     addStartCand((itx as any).timestamp);
+    addStartCand((itx as any).depositTimestamp);
   });
 
   if (cleanEmail === 'abdulha@gmail.com') {
@@ -370,6 +374,7 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
 
   const canonicalDepStartSec = startCandidates.length > 0 ? Math.min(...startCandidates) : Math.max(1, nowSecForConsolidation - 60);
   canonicalUser.depositStartTime = canonicalDepStartSec;
+  canonicalUser.depositTimestamp = canonicalDepStartSec * 1000;
 
   if (effectivePrincipal.isLessThanOrEqualTo(0)) {
     canonicalUser.principalBalance = '0.000000000000000000';

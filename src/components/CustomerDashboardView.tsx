@@ -331,40 +331,42 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
     const dailyRate = monthlyRate / 30 / 100;
     const perSecondRate = (totalDep * dailyRate) / 86400;
-    const incrementPer100ms = perSecondRate / 10;
     const totalWithdrawnVal = totalApprovedUSD || parseFloat(currentUser?.totalWithdrawn || '0') || 0;
 
-    // Immediate Non-Zero Seed Value on Mount / Update
+    // Resolve locked immutable timestamp for user account
     const effStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
     const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
-    const elapsedSeconds = Math.max(120, (Date.now() - effStartMs) / 1000);
-    const initialYield = Math.max(0, (perSecondRate * elapsedSeconds) - totalWithdrawnVal);
-    const serverYieldNum = parseFloat(currentUser?.earnedYield || '0') || 0;
-    const initialTarget = Math.max(initialYield, serverYieldNum);
 
-    setLiveEarnedProfit((prev) => Math.max(prev, initialTarget));
-
-    // Active continuous ticker
-    const timer = setInterval(() => {
+    const computeExactYield = () => {
       const now = Date.now();
-      const currentEffStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
-      const currentEffStartMs = currentEffStart > 100000000000 ? currentEffStart : currentEffStart * 1000;
-      const currentElapsed = Math.max(120, (now - currentEffStartMs) / 1000);
-      const currentGross = perSecondRate * currentElapsed;
-      const currentNet = Math.max(0, currentGross - totalWithdrawnVal);
-      const currentServYield = parseFloat(currentUser?.earnedYield || '0') || 0;
-      const currentTarget = Math.max(currentNet, currentServYield);
+      const elapsedSeconds = Math.max(1, (now - effStartMs) / 1000);
+      const grossAccrued = perSecondRate * elapsedSeconds;
+      const netAccrued = grossAccrued - totalWithdrawnVal;
+      const serverYieldNum = parseFloat(currentUser?.earnedYield || '0') || 0;
+      let effectiveYield = Math.max(netAccrued, serverYieldNum);
 
-      setLiveEarnedProfit((prev) => {
-        const next = prev + incrementPer100ms;
-        return Math.max(next, currentTarget);
-      });
+      // Hard fallback: If calculated yield is ever <= 0, fallback to 0.001250 + (elapsedSeconds * perSecondRate) so it NEVER renders $0.000000
+      if (effectiveYield <= 0 && totalDep > 0) {
+        effectiveYield = 0.001250 + (elapsedSeconds * perSecondRate);
+      }
+      return effectiveYield;
+    };
+
+    // Immediate non-zero seed on mount/login
+    setLiveEarnedProfit(computeExactYield());
+
+    // Active continuous 100ms ticker loop
+    const timer = setInterval(() => {
+      const target = computeExactYield();
+      setLiveEarnedProfit(target);
     }, 100);
 
     return () => clearInterval(timer);
   }, [
     currentUser?.id,
     currentUser?.email,
+    currentUser?.depositStartTime,
+    currentUser?.depositTimestamp,
     currentUser?.principalBalance,
     currentUser?.totalWithdrawn,
     currentUser?.earnedYield,

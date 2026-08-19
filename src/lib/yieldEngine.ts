@@ -297,8 +297,14 @@ export function resolveCanonicalDepositStartTime(
     }
   };
 
+  if (user?.depositTimestamp) {
+    addCandidate(user.depositTimestamp);
+  }
   if (user?.depositStartTime) {
     addCandidate(user.depositStartTime);
+  }
+  if (activeInvestment?.depositTimestamp) {
+    addCandidate(activeInvestment.depositTimestamp);
   }
   if (activeInvestment?.depositStartTime) {
     addCandidate(activeInvestment.depositStartTime);
@@ -311,6 +317,7 @@ export function resolveCanonicalDepositStartTime(
       if (d) {
         addCandidate(d.startTime);
         addCandidate((d as any).depositStartTime);
+        addCandidate((d as any).depositTimestamp);
         addCandidate((d as any).createdAt);
       }
     });
@@ -325,28 +332,44 @@ export function resolveCanonicalDepositStartTime(
     addCandidate('2026-08-14T00:00:00.000Z');
   }
 
+  const cleanEmail = (user?.email || '').trim().toLowerCase();
+  const userId = (user?.id || '').trim();
+
   // Check localStorage for persisted anchor
-  if (typeof window !== 'undefined' && window.localStorage && (user?.id || user?.email)) {
-    const key = `dc_dep_start_${user.id || user.email}`;
-    const stored = window.localStorage.getItem(key);
-    if (stored) addCandidate(stored);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    if (userId) {
+      const stored = window.localStorage.getItem(`dc_dep_start_${userId}`);
+      if (stored) addCandidate(stored);
+    }
+    if (cleanEmail) {
+      const storedYield = window.localStorage.getItem(`dollarcraft_yield_${cleanEmail}`);
+      const storedDc = window.localStorage.getItem(`dc_dep_start_${cleanEmail}`);
+      if (storedYield) addCandidate(storedYield);
+      if (storedDc) addCandidate(storedDc);
+    }
   }
+
+  const persistAnchor = (val: number) => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      if (userId) window.localStorage.setItem(`dc_dep_start_${userId}`, String(val));
+      if (cleanEmail) {
+        window.localStorage.setItem(`dollarcraft_yield_${cleanEmail}`, String(val));
+        window.localStorage.setItem(`dc_dep_start_${cleanEmail}`, String(val));
+      }
+    }
+  };
 
   if (candidates.length > 0) {
     const minCandidate = Math.min(...candidates);
     if (!isNaN(minCandidate) && minCandidate > 0) {
-      if (typeof window !== 'undefined' && window.localStorage && (user?.id || user?.email)) {
-        window.localStorage.setItem(`dc_dep_start_${user.id || user.email}`, String(minCandidate));
-      }
+      persistAnchor(minCandidate);
       return minCandidate;
     }
   }
 
-  // 1-minute baseline fallback: never return 0 or equal to nowSec
-  const fallbackSec = Math.max(1, nowSec - 60);
-  if (typeof window !== 'undefined' && window.localStorage && (user?.id || user?.email)) {
-    window.localStorage.setItem(`dc_dep_start_${user.id || user.email}`, String(fallbackSec));
-  }
+  // 1-hour baseline fallback (3600s ago) per user request: never return 0 or equal to nowSec
+  const fallbackSec = Math.max(1, nowSec - 3600);
+  persistAnchor(fallbackSec);
   return fallbackSec;
 }
 

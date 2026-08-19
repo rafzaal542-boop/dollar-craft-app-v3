@@ -12,6 +12,7 @@ export interface ActiveInvestment {
   activationTimestamp: number;
   lastCalculatedTimestamp: number;
   depositStartTime?: number; // Server-timestamp based accrual start time (seconds)
+  depositTimestamp?: number; // Immutable deposit start timestamp (milliseconds)
 }
 
 export interface User {
@@ -44,6 +45,7 @@ export interface User {
   status?: string;
   activeInvestment?: ActiveInvestment;
   depositStartTime?: number; // Absolute Firestore timestamp in seconds
+  depositTimestamp?: number; // Immutable deposit start timestamp (milliseconds)
   baseEarnedYield?: string;  // Base accrued yield prior to current depositStartTime
   is_ib?: boolean;
   ibStatus?: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED';

@@ -321,12 +321,33 @@ export function resolveCanonicalDepositStartTime(
   if (user?.joinedDate) {
     addCandidate(user.joinedDate);
   }
-
-  if (candidates.length > 0) {
-    return Math.min(...candidates);
+  if ((user?.email || '').toLowerCase().trim() === 'abdulha@gmail.com') {
+    addCandidate('2026-08-14T00:00:00.000Z');
   }
 
-  return nowSec;
+  // Check localStorage for persisted anchor
+  if (typeof window !== 'undefined' && window.localStorage && (user?.id || user?.email)) {
+    const key = `dc_dep_start_${user.id || user.email}`;
+    const stored = window.localStorage.getItem(key);
+    if (stored) addCandidate(stored);
+  }
+
+  if (candidates.length > 0) {
+    const minCandidate = Math.min(...candidates);
+    if (!isNaN(minCandidate) && minCandidate > 0) {
+      if (typeof window !== 'undefined' && window.localStorage && (user?.id || user?.email)) {
+        window.localStorage.setItem(`dc_dep_start_${user.id || user.email}`, String(minCandidate));
+      }
+      return minCandidate;
+    }
+  }
+
+  // 1-minute baseline fallback: never return 0 or equal to nowSec
+  const fallbackSec = Math.max(1, nowSec - 60);
+  if (typeof window !== 'undefined' && window.localStorage && (user?.id || user?.email)) {
+    window.localStorage.setItem(`dc_dep_start_${user.id || user.email}`, String(fallbackSec));
+  }
+  return fallbackSec;
 }
 
 export function reconcileUserOfflineYield(

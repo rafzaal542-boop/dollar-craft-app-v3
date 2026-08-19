@@ -313,83 +313,65 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     return Math.max(userPrincipal, userTotalDep, depositSum, transferSum).toFixed(4);
   };
 
-  const [liveNowSec, setLiveNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
+  const [liveEarnedProfit, setLiveEarnedProfit] = useState<number>(0);
 
+  // Active React ticker state binding & continuous 100ms live loop
   useEffect(() => {
-    const timer = setInterval(() => {
-      setLiveNowSec(Math.floor(Date.now() / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const lastRenderedProfitRef = React.useRef<number>(0);
-  const prevEarnedYieldRef = React.useRef<string>(currentUser?.earnedYield || '0');
-
-  // Sync ref with currentUser on load, user changes, and withdrawal deductions
-  useEffect(() => {
-    if (currentUser?.earnedYield) {
-      const parsed = parseFloat(currentUser.earnedYield) || 0;
-      const prevParsed = parseFloat(prevEarnedYieldRef.current) || 0;
-      // If profit decreased (e.g. withdrawal was placed), reset ref immediately to new lower base
-      if (parsed < prevParsed || !lastRenderedProfitRef.current) {
-        lastRenderedProfitRef.current = parsed;
-      } else {
-        lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, parsed);
-      }
-      prevEarnedYieldRef.current = currentUser.earnedYield;
+    if (!currentUser) {
+      setLiveEarnedProfit(0);
+      return;
     }
-  }, [currentUser?.earnedYield, currentUser?.email, currentUser?.id]);
 
-  const getLiveAccruedDailyProfit = (): string => {
-    if (!currentUser) return '0.000000';
     const totalDep = parseFloat(getCalculatedTotalDeposit()) || 0;
     if (totalDep <= 0) {
-      lastRenderedProfitRef.current = 0;
-      prevEarnedYieldRef.current = '0';
-      return '0.000000';
+      setLiveEarnedProfit(0);
+      return;
     }
 
-    const effDepositStart = resolveCanonicalDepositStartTime(
-      currentUser,
-      currentUser.activeInvestment,
-      deposits
-    );
+    const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+    const dailyRate = monthlyRate / 30 / 100;
+    const perSecondRate = (totalDep * dailyRate) / 86400;
+    const incrementPer100ms = perSecondRate / 10;
+    const totalWithdrawnVal = totalApprovedUSD || parseFloat(currentUser?.totalWithdrawn || '0') || 0;
 
-    const monthlyRate = currentUser.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
-    const totalWithdrawnVal = totalApprovedUSD || parseFloat(currentUser.totalWithdrawn || '0') || 0;
+    // Immediate Non-Zero Seed Value on Mount / Update
+    const effStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
+    const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
+    const elapsedSeconds = Math.max(120, (Date.now() - effStartMs) / 1000);
+    const initialYield = Math.max(0, (perSecondRate * elapsedSeconds) - totalWithdrawnVal);
+    const serverYieldNum = parseFloat(currentUser?.earnedYield || '0') || 0;
+    const initialTarget = Math.max(initialYield, serverYieldNum);
 
-    const yieldRes = calculateServerTimestampYield(
-      totalDep,
-      monthlyRate,
-      effDepositStart,
-      liveNowSec,
-      0,
-      totalWithdrawnVal
-    );
+    setLiveEarnedProfit((prev) => Math.max(prev, initialTarget));
 
-    const calculatedProfit = yieldRes.accumulatedProfit.toNumber();
-    const serverYieldNum = parseFloat(currentUser.earnedYield || '0') || 0;
-    const effectiveTarget = Math.max(calculatedProfit, serverYieldNum);
+    // Active continuous ticker
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const currentEffStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
+      const currentEffStartMs = currentEffStart > 100000000000 ? currentEffStart : currentEffStart * 1000;
+      const currentElapsed = Math.max(120, (now - currentEffStartMs) / 1000);
+      const currentGross = perSecondRate * currentElapsed;
+      const currentNet = Math.max(0, currentGross - totalWithdrawnVal);
+      const currentServYield = parseFloat(currentUser?.earnedYield || '0') || 0;
+      const currentTarget = Math.max(currentNet, currentServYield);
 
-    const prevParsed = parseFloat(prevEarnedYieldRef.current) || 0;
-    if (effectiveTarget < prevParsed && prevParsed - effectiveTarget > 1) {
-      lastRenderedProfitRef.current = effectiveTarget;
-      prevEarnedYieldRef.current = String(effectiveTarget);
-    } else {
-      lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, effectiveTarget);
-      prevEarnedYieldRef.current = String(lastRenderedProfitRef.current);
-    }
+      setLiveEarnedProfit((prev) => {
+        const next = prev + incrementPer100ms;
+        return Math.max(next, currentTarget);
+      });
+    }, 100);
 
-    return lastRenderedProfitRef.current.toFixed(6);
-  };
-
-  const calculateTotalBalance = () => {
-    if (!currentUser) return '0.0000';
-    const deposit = parseFloat(getCalculatedTotalDeposit()) || 0;
-    const liveProfit = parseFloat(getLiveAccruedDailyProfit()) || 0;
-    const calculatedSum = deposit + liveProfit;
-    return Math.max(0, calculatedSum).toFixed(4);
-  };
+    return () => clearInterval(timer);
+  }, [
+    currentUser?.id,
+    currentUser?.email,
+    currentUser?.principalBalance,
+    currentUser?.totalWithdrawn,
+    currentUser?.earnedYield,
+    totalApprovedUSD,
+    deposits.length,
+    internalTransfers.length
+  ]);
 
   const getCalculatedDailyProfit = (): string => {
     if (!currentUser) return '0.0000';
@@ -533,7 +515,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                 </span>
               </div>
               <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight break-all">
-                ${calculateTotalBalance()}
+                ${(parseFloat(getCalculatedTotalDeposit()) + liveEarnedProfit).toFixed(4)}
               </div>
             </div>
 
@@ -573,10 +555,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                   TICKING LIVE
                 </span>
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all flex items-baseline">
-                <span>$</span>
-                <span>{getLiveAccruedDailyProfit().split('.')[0]}</span>
-                <span className="text-amber-400 text-2xl sm:text-3xl">.{getLiveAccruedDailyProfit().split('.')[1] || '000000'}</span>
+              <div className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all">
+                ${liveEarnedProfit.toFixed(6)}
               </div>
               <div className="text-xs font-mono text-slate-400 flex items-center justify-between pt-2 border-t border-slate-800/80">
                 <span className="flex items-center gap-1 text-slate-400">

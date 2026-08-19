@@ -313,14 +313,29 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     return Math.max(userPrincipal, userTotalDep, depositSum, transferSum).toFixed(4);
   };
 
+  const lastRenderedProfitRef = React.useRef<number>(0);
+
+  // Sync ref with currentUser on load or user changes
+  useEffect(() => {
+    if (currentUser?.earnedYield) {
+      const parsed = parseFloat(currentUser.earnedYield) || 0;
+      lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, parsed);
+    }
+  }, [currentUser?.email, currentUser?.id]);
+
   const getLiveAccruedDailyProfit = (): string => {
     if (!currentUser) return '0.000000';
     const totalDep = parseFloat(getCalculatedTotalDeposit()) || 0;
-    if (totalDep <= 0) return '0.000000';
+    if (totalDep <= 0) {
+      lastRenderedProfitRef.current = 0;
+      return '0.000000';
+    }
 
-    // High-precision realtime yield (earnedYield is cumulative net earned profit)
+    // High-precision realtime yield with strict monotonic clamp
     const earnedYieldNum = parseFloat(currentUser.earnedYield || '0') || 0;
-    return Math.max(0, earnedYieldNum).toFixed(6);
+    const clampedYield = Math.max(lastRenderedProfitRef.current, earnedYieldNum);
+    lastRenderedProfitRef.current = clampedYield;
+    return clampedYield.toFixed(6);
   };
 
   const calculateTotalBalance = () => {

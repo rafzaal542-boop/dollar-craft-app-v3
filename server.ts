@@ -3782,6 +3782,7 @@ app.post('/api/withdrawal/request', async (req: Request, res: Response) => {
     // Deduct directly and strictly from Daily Profit (earnedYield) and totalBalance
     const newYieldBN = BigNumber.max(0, userYieldBN.minus(requestBN));
     const newYieldStr = newYieldBN.toFixed(18);
+    const nowSec = Math.floor(Date.now() / 1000);
     activeUser.earnedYield = newYieldStr;
     activeUser.dailyProfit = newYieldBN.toNumber();
     activeUser.totalWithdrawn = new BigNumber(activeUser.totalWithdrawn || '0').plus(requestBN).toFixed(18);
@@ -3789,7 +3790,8 @@ app.post('/api/withdrawal/request', async (req: Request, res: Response) => {
     const pBalNum = Number(activeUser.principalBalance || 0);
     const newTotBal = Math.max(0, pBalNum + newYieldBN.toNumber());
     activeUser.totalBalance = newTotBal;
-    activeUser.baseEarnedYield = '0.000000000000000000';
+    activeUser.baseEarnedYield = newYieldStr;
+    activeUser.depositStartTime = nowSec;
 
     // Sync across all mockUsers entries matching email or id
     const userEmailClean = (activeUser.email || '').toLowerCase().trim();
@@ -3799,7 +3801,8 @@ app.post('/api/withdrawal/request', async (req: Request, res: Response) => {
         u.dailyProfit = newYieldBN.toNumber();
         u.totalWithdrawn = activeUser.totalWithdrawn;
         u.totalBalance = newTotBal;
-        u.baseEarnedYield = '0.000000000000000000';
+        u.baseEarnedYield = newYieldStr;
+        u.depositStartTime = nowSec;
       }
     });
 

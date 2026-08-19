@@ -78,7 +78,7 @@ function calculateOfflineYield(savedVal: string, elapsedSeconds: number, default
   let intBN = new BigNumber(parts[0] || defaultInt);
   let fracBN = new BigNumber("0." + (parts[1] || "0000"));
 
-  // 10 ticks per second at 100ms interval, 0.0025 per tick -> 0.025 per second
+  // Exact deterministic rate: 0.025 per second
   const offlineIncrement = new BigNumber(elapsedSeconds).multipliedBy("0.025");
   fracBN = fracBN.plus(offlineIncrement);
 
@@ -193,9 +193,12 @@ export const DollarCraftDashboard: React.FC<DollarCraftDashboardProps> = ({
     }
   ]);
 
-  // Real-Time Micro-Tick Simulation Engine (Limit 0.5000 -> Auto +$5 Dollar Increase, Non-Stop Continuous High-Frequency Ticker)
+  // Real-Time Deterministic Accrual Ticker (Strict Monotonic Progression, Zero Random Jitter)
   useEffect(() => {
     if (!isTickActive) return;
+
+    // Deterministic baseline increment per tick (60ms tick -> 0.025/sec = 0.0015 per tick)
+    const tickIncrement = new BigNumber("0.0015");
 
     const interval = setInterval(() => {
       setLiveBalance((prev) => {
@@ -203,10 +206,7 @@ export const DollarCraftDashboard: React.FC<DollarCraftDashboardProps> = ({
         let intBN = new BigNumber(parts[0] || "680364542");
         let fracBN = new BigNumber("0." + (parts[1] || "0000"));
 
-        // Micro-tick continuous fractional increment per 60ms cycle
-        const randomDelta = (Math.random() * 0.0003 + 0.0002).toFixed(6);
-        const microIncrement = new BigNumber(randomDelta);
-        let nextFrac = fracBN.plus(microIncrement);
+        let nextFrac = fracBN.plus(tickIncrement);
 
         if (nextFrac.gte(new BigNumber("1.0000"))) {
           intBN = intBN.plus(1);
@@ -222,9 +222,7 @@ export const DollarCraftDashboard: React.FC<DollarCraftDashboardProps> = ({
         let intBN = new BigNumber(parts[0] || "45892301");
         let fracBN = new BigNumber("0." + (parts[1] || "0000"));
 
-        const randomDelta = (Math.random() * 0.0002 + 0.0001).toFixed(6);
-        const microIncrement = new BigNumber(randomDelta);
-        let nextFrac = fracBN.plus(microIncrement);
+        let nextFrac = fracBN.plus(tickIncrement.multipliedBy("0.67"));
 
         if (nextFrac.gte(new BigNumber("1.0000"))) {
           intBN = intBN.plus(1);
@@ -235,7 +233,7 @@ export const DollarCraftDashboard: React.FC<DollarCraftDashboardProps> = ({
         return `${intBN.toFixed(0)}.${formattedFrac}`;
       });
 
-      // Increment cycle yields slightly
+      // Increment cycle yields deterministically
       setActivePlans((plans) =>
         plans.map((p) => {
           const bnAcc = new BigNumber(p.accumulatedYield || "32.0000");

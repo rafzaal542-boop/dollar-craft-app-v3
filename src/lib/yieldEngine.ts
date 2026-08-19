@@ -79,6 +79,7 @@ export function calculateServerTimestampYield(
   }
   const elapsedSeconds = Math.max(0, currSec - startSec);
 
+  // Exact formula: accruedYield = (totalDeposit * dailyRate * elapsedSeconds) / 86400 + baseEarnedYield
   const incrementalYield = yieldPerSec.multipliedBy(elapsedSeconds);
   const accumulatedProfit = BigNumber.max(0, baseBN.plus(incrementalYield));
   const displayBalance = BigNumber.max(0, depositBN.plus(accumulatedProfit));

@@ -116,8 +116,43 @@ export default function App() {
 
   // Ref counter for periodic cloud sync
   const fsSyncTickRef = React.useRef(0);
+  // Strict Monotonic Clamp Ref: Guarantees yield strictly increments forward and NEVER decreases or flickers
+  const lastRenderedYieldRef = React.useRef<BigNumber>(new BigNumber(0));
 
-  // Live real-time second-by-second micro-accruals loop using absolute Server-Timestamp Formula
+  // Initialize and synchronize lastRenderedYieldRef baseline on user change
+  useEffect(() => {
+    if (user?.earnedYield) {
+      const userYieldBN = new BigNumber(user.earnedYield || '0');
+      lastRenderedYieldRef.current = BigNumber.max(lastRenderedYieldRef.current, userYieldBN);
+    }
+  }, [user?.id, user?.email]);
+
+  // Tab visibility change handler: Recovers yield smoothly when user switches tabs without jitter or resets
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user) {
+        setUser((prev) => {
+          if (!prev) return prev;
+          const res = reconcileUserOfflineYield(prev, activeInvestment || prev.activeInvestment);
+          if (res.updatedUser) {
+            const calculatedBN = new BigNumber(res.updatedUser.earnedYield || '0');
+            lastRenderedYieldRef.current = BigNumber.max(lastRenderedYieldRef.current, calculatedBN);
+            return {
+              ...res.updatedUser,
+              earnedYield: lastRenderedYieldRef.current.toFixed(18),
+              dailyProfit: lastRenderedYieldRef.current.toNumber()
+            };
+          }
+          return prev;
+        });
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [user?.id, user?.email, activeInvestment]);
+
+  // Unified Single Global Real-Time Accruals Loop using Deterministic Server-Timestamp Formula
   useEffect(() => {
     if (!user) return;
 
@@ -135,6 +170,7 @@ export default function App() {
 
         // Zero Deposit Hard Guard: If totalDeposit <= 0, dailyProfit MUST be 0.0000 & totalBalance MUST be 0.0000
         if (totalDep <= 0) {
+          lastRenderedYieldRef.current = new BigNumber(0);
           if (microYieldPerSecond !== '0') {
             setMicroYieldPerSecond('0');
           }
@@ -199,7 +235,9 @@ export default function App() {
         }
 
         // Server-Timestamp Based Accrual Engine Calculation (Anchored to canonical immutable deposit start)
-        const depositStartSec = canonicalDepositStart;
+        const depositStartSec = prevUser.depositStartTime && Number(prevUser.depositStartTime) > 0
+          ? Number(prevUser.depositStartTime)
+          : canonicalDepositStart;
         let baseYieldStr = prevUser.baseEarnedYield || '0.000000000000000000';
         const totalWithdrawnVal = prevUser.totalWithdrawn || '0';
 
@@ -215,12 +253,19 @@ export default function App() {
         );
 
         const yieldPerSec = yieldRes.yieldPerSecond;
-        const newEarnedBN = yieldRes.accumulatedProfit;
+        const calculatedYieldBN = yieldRes.accumulatedProfit;
 
-        // Monotonic sequence: yield ticks up incrementally second by second based on server timestamp formula
-        const newEarnedStr = newEarnedBN.toFixed(18);
+        // Strict Monotonic Clamp: Ensure yield strictly increments forward, never decreases or jumps backward
+        const currentYieldBN = BigNumber.max(
+          lastRenderedYieldRef.current,
+          new BigNumber(prevUser.earnedYield || '0'),
+          calculatedYieldBN
+        );
+        lastRenderedYieldRef.current = currentYieldBN;
+
+        const newEarnedStr = currentYieldBN.toFixed(18);
         const newTotalBal = Math.max(
-          totalDep + newEarnedBN.toNumber(),
+          totalDep + currentYieldBN.toNumber(),
           0
         );
 
@@ -243,7 +288,7 @@ export default function App() {
         }
 
         // BIND DAILY PROFIT DIRECTLY TO REALTIME YIELD ACCRUAL
-        const dailyProfitNum = newEarnedBN.toNumber();
+        const dailyProfitNum = currentYieldBN.toNumber();
 
         const updatedUser: User = {
           ...prevUser,
@@ -332,11 +377,13 @@ export default function App() {
             const effectiveBalNum = effectiveBalBN.toNumber();
             const effectiveDepNum = effectiveDepBN.toNumber();
 
-            const effectiveDepositStart = resolveCanonicalDepositStartTime(
-              { ...prevUser, ...d },
-              d.activeInvestment || prevUser.activeInvestment,
-              deposits
-            );
+            const effectiveDepositStart = (d.depositStartTime && Number(d.depositStartTime) > 0)
+              ? Number(d.depositStartTime)
+              : resolveCanonicalDepositStartTime(
+                  { ...prevUser, ...d },
+                  d.activeInvestment || prevUser.activeInvestment,
+                  deposits
+                );
             let fsBaseYield = d.baseEarnedYield !== undefined && d.baseEarnedYield !== null
               ? String(d.baseEarnedYield)
               : (prevUser.baseEarnedYield || '0.000000000000000000');
@@ -359,7 +406,7 @@ export default function App() {
               monthlyRate,
               effectiveDepositStart,
               nowSec,
-              0,
+              fsBaseYield,
               fsWithdrawn
             );
 
@@ -1019,6 +1066,7 @@ export default function App() {
     const newWithdrawnStr = new BigNumber(user.totalWithdrawn || '0').plus(amount).toFixed(18);
     const totalDepNum = parseFloat(String(user.totalDeposit || user.principalBalance || '0')) || 0;
     const newTotBal = Math.max(0, totalDepNum + newYieldBN.toNumber());
+    const nowSec = Math.floor(Date.now() / 1000);
 
     const updatedUser: User = {
       ...user,
@@ -1026,8 +1074,8 @@ export default function App() {
       dailyProfit: newDailyProfit,
       totalWithdrawn: newWithdrawnStr,
       totalBalance: newTotBal,
-      baseEarnedYield: '0.000000000000000000',
-      depositStartTime: user.depositStartTime || Math.floor(Date.now() / 1000)
+      baseEarnedYield: newYieldStr,
+      depositStartTime: nowSec
     };
 
     // 1. Update React user state immediately (INSTANT UI RE-RENDER)

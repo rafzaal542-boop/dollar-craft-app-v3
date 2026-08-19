@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { BigNumber, formatCurrency, formatPrecision, resolveCanonicalDepositStartTime } from '../lib/yieldEngine';
+import { BigNumber, formatCurrency, formatPrecision, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit } from '../lib/yieldEngine';
 import { User, UserDeposit } from '../types';
 import { CinematicButton } from './ui/CinematicButton';
 import html2canvas from 'html2canvas';
@@ -67,57 +67,14 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
   // Real-time synchronization of exact same live accrued profit as Total Earned Profit
   const [liveProfitBalance, setLiveProfitBalance] = useState<number>(() => {
-    return parseFloat(availableBalance || earnedYield || '0') || 0;
+    return computeLiveUserAccruedProfit(currentUser, deposits, transactions);
   });
 
   useEffect(() => {
     if (!isOpen) return;
 
     const calcLiveProfit = () => {
-      if (!currentUser) return parseFloat(availableBalance || earnedYield || '0') || 0;
-      const totalDep = typeof currentUser.totalDeposit === 'number' 
-        ? currentUser.totalDeposit 
-        : parseFloat(String(currentUser.totalDeposit || currentUser.principalBalance || '0')) || 0;
-      
-      if (totalDep <= 0) return 0;
-
-      const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
-      const dailyRateYield = totalDep * (monthlyRate / 30 / 100);
-      const perSecondRate = dailyRateYield / 86400;
-
-      const effStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
-      const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
-      const elapsedSeconds = Math.max(1, (Date.now() - effStartMs) / 1000);
-
-      // User's specific withdrawals
-      const userWdList = (transactions || [])
-        .filter((w: any) => {
-          const tEmail = (w.userEmail || w.email || '').toLowerCase().trim();
-          const tId = (w.userId || '').trim();
-          const uEmail = (currentUser?.email || '').toLowerCase().trim();
-          const uId = (currentUser?.id || '').trim();
-          const isUserMatch = (uEmail && tEmail === uEmail) || (uId && tId === uId);
-          return isUserMatch && w.status !== 'REJECTED';
-        });
-
-      const userWdSum = userWdList.reduce((sum: number, w: any) => sum + (parseFloat(w.amount || '0') || 0), 0);
-      const totalWithdrawnVal = Math.max(
-        userWdSum,
-        parseFloat(currentUser?.totalWithdrawn || '0') || 0
-      );
-
-      const grossAccrued = perSecondRate * elapsedSeconds;
-      const netAccrued = grossAccrued - totalWithdrawnVal;
-
-      let effectiveYield = netAccrued;
-      if (effectiveYield <= 0 && totalDep > 0) {
-        const lastWdTime = userWdList.length > 0
-          ? Math.max(...userWdList.map((w: any) => new Date(w.createdAt || 0).getTime()))
-          : effStartMs;
-        const elapsedSinceWd = Math.max(1, (Date.now() - (lastWdTime > 0 ? lastWdTime : effStartMs)) / 1000);
-        effectiveYield = Math.max(0.000001, elapsedSinceWd * perSecondRate);
-      }
-      return effectiveYield;
+      return computeLiveUserAccruedProfit(currentUser, deposits, transactions);
     };
 
     setLiveProfitBalance(calcLiveProfit());
@@ -127,7 +84,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
     }, 100);
 
     return () => clearInterval(timer);
-  }, [isOpen, currentUser, availableBalance, earnedYield, deposits, transactions]);
+  }, [isOpen, currentUser, deposits, transactions]);
 
   if (!isOpen) return null;
 

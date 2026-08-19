@@ -1,5 +1,5 @@
 import BigNumber from 'bignumber.js';
-import { User, ActiveInvestment, UserDeposit } from '../types';
+import { User, ActiveInvestment, UserDeposit, Transaction } from '../types';
 
 // Configure BigNumber for extreme financial precision (18 decimal places, explicit ROUND_DOWN for safety)
 BigNumber.config({
@@ -540,3 +540,64 @@ export function reconcileUserOfflineYield(
     elapsedSeconds: Math.floor(yieldRes.elapsedSeconds)
   };
 }
+
+/**
+ * Universal canonical live yield counter calculator.
+ * Ensures Total Earned Profit on Dashboard and Available Profit in Withdrawal Modal
+ * ALWAYS display the exact same mathematical dollars down to 6 decimal places.
+ */
+export function computeLiveUserAccruedProfit(
+  user: User | null | undefined,
+  deposits: UserDeposit[] = [],
+  transactions: Transaction[] = []
+): number {
+  if (!user) return 0;
+  
+  const depositSum = (deposits || []).reduce(
+    (sum, d) => sum + (parseFloat(d.principalAmount || (d as any).amount) || 0),
+    0
+  );
+  const userPrincipal = parseFloat(user.principalBalance || '0') || 0;
+  const userTotalDep = typeof user.totalDeposit === 'number' ? user.totalDeposit : parseFloat(String(user.totalDeposit || '0')) || 0;
+  const totalDep = Math.max(userPrincipal, userTotalDep, depositSum);
+
+  if (totalDep <= 0) return 0;
+
+  const monthlyRate = user.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+  const dailyRate = monthlyRate / 30 / 100;
+  const perSecondRate = (totalDep * dailyRate) / 86400;
+
+  const uEmail = (user.email || '').toLowerCase().trim();
+  const uId = (user.id || '').trim();
+  const userWdList = (transactions || []).filter((w: any) => {
+    if (w.status === 'REJECTED') return false;
+    const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
+    const wUserId = (w.userId || '').trim();
+    return (uEmail && wEmail === uEmail) || (uId && wUserId === uId);
+  });
+
+  const userWdSum = userWdList.reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
+  const totalWithdrawnVal = Math.max(
+    userWdSum,
+    parseFloat(user.totalWithdrawn || '0') || 0
+  );
+
+  const effStart = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
+  const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
+  const now = Date.now();
+  const elapsedSeconds = Math.max(1, (now - effStartMs) / 1000);
+  const grossAccrued = perSecondRate * elapsedSeconds;
+
+  const netAccrued = grossAccrued - totalWithdrawnVal;
+  let effectiveYield = netAccrued;
+  if (effectiveYield <= 0 && totalDep > 0) {
+    const lastWdTime = userWdList.length > 0
+      ? Math.max(...userWdList.map((w: any) => new Date(w.createdAt || 0).getTime()))
+      : effStartMs;
+    const elapsedSinceWd = Math.max(1, (now - (lastWdTime > 0 ? lastWdTime : effStartMs)) / 1000);
+    effectiveYield = Math.max(0.000001, elapsedSinceWd * perSecondRate);
+  }
+
+  return effectiveYield;
+}
+

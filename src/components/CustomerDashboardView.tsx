@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { User, UserDeposit, Transaction } from '../types';
-import { getPlanRates, calculateServerTimestampYield, resolveCanonicalDepositStartTime } from '../lib/yieldEngine';
+import { getPlanRates, calculateServerTimestampYield, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit } from '../lib/yieldEngine';
 import { 
   User as UserIcon, 
   UserCheck, 
@@ -322,79 +322,23 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       return;
     }
 
-    const totalDep = parseFloat(getCalculatedTotalDeposit()) || 0;
-    if (totalDep <= 0) {
-      setLiveEarnedProfit(0);
-      return;
-    }
-
-    const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
-    const dailyRate = monthlyRate / 30 / 100;
-    const perSecondRate = (totalDep * dailyRate) / 86400;
-    
-    // Strict match of withdrawals belonging ONLY to current user
-    const uEmail = (currentUser?.email || '').toLowerCase().trim();
-    const uId = (currentUser?.id || '').trim();
-    const userWithdrawalsList = displayWithdrawals
-      .filter((w) => {
-        if (w.status === 'REJECTED') return false;
-        const wEmail = (w.userEmail || '').toLowerCase().trim();
-        const wUserId = (w.userId || '').trim();
-        return (uEmail && wEmail === uEmail) || (uId && wUserId === uId);
-      });
-
-    const userWdSum = userWithdrawalsList.reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
-    const totalWithdrawnVal = Math.max(
-      userWdSum,
-      parseFloat(currentUser?.totalWithdrawn || '0') || 0
-    );
-
-    // Resolve locked immutable timestamp for user account
-    const effStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
-    const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
-
-    const computeExactYield = () => {
-      const now = Date.now();
-      const elapsedSeconds = Math.max(1, (now - effStartMs) / 1000);
-      const grossAccrued = perSecondRate * elapsedSeconds;
-
-      // Strict permanent deduction of all withdrawn dollars:
-      const netAccrued = grossAccrued - totalWithdrawnVal;
-
-      let effectiveYield = netAccrued;
-      if (effectiveYield <= 0 && totalDep > 0) {
-        // If withdrawn amount exceeds or equals gross accrued, start fresh ticking from last withdrawal time
-        const lastWdTime = userWithdrawalsList.length > 0
-          ? Math.max(...userWithdrawalsList.map((w) => new Date(w.createdAt || 0).getTime()))
-          : effStartMs;
-        const elapsedSinceWd = Math.max(1, (now - (lastWdTime > 0 ? lastWdTime : effStartMs)) / 1000);
-        effectiveYield = Math.max(0.000001, elapsedSinceWd * perSecondRate);
-      }
-      return effectiveYield;
+    const computeExact = () => {
+      return computeLiveUserAccruedProfit(currentUser, deposits, displayWithdrawals);
     };
 
     // Immediate non-zero seed on mount/login
-    setLiveEarnedProfit(computeExactYield());
+    setLiveEarnedProfit(computeExact());
 
     // Active continuous 100ms ticker loop
     const timer = setInterval(() => {
-      const target = computeExactYield();
-      setLiveEarnedProfit(target);
+      setLiveEarnedProfit(computeExact());
     }, 100);
 
     return () => clearInterval(timer);
   }, [
-    currentUser?.id,
-    currentUser?.email,
-    currentUser?.depositStartTime,
-    currentUser?.depositTimestamp,
-    currentUser?.principalBalance,
-    currentUser?.totalWithdrawn,
-    currentUser?.earnedYield,
-    currentUser?.totalDeposit,
+    currentUser,
     displayWithdrawals,
-    deposits.length,
-    internalTransfers.length
+    deposits
   ]);
 
   const getCalculatedDailyProfit = (): string => {

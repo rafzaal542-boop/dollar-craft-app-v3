@@ -777,7 +777,11 @@ export default function App() {
               maxWithdrawnBN
             );
 
-            const finalYieldBN = BigNumber.max(yieldRes.accumulatedProfit, new BigNumber(data.user.earnedYield || 0), new BigNumber(data.user.dailyProfit || 0));
+            const finalYieldBN = BigNumber.max(
+              0,
+              yieldRes.accumulatedProfit,
+              new BigNumber(data.user.earnedYield || 0).minus(maxWithdrawnBN)
+            );
             const finalYieldStr = finalYieldBN.toFixed(18);
             const totalBalNum = Math.max(0, totalDepNum + finalYieldBN.toNumber());
 

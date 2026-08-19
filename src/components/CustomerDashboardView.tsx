@@ -335,15 +335,15 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     // Strict match of withdrawals belonging ONLY to current user
     const uEmail = (currentUser?.email || '').toLowerCase().trim();
     const uId = (currentUser?.id || '').trim();
-    const userWdSum = displayWithdrawals
+    const userWithdrawalsList = displayWithdrawals
       .filter((w) => {
         if (w.status === 'REJECTED') return false;
         const wEmail = (w.userEmail || '').toLowerCase().trim();
         const wUserId = (w.userId || '').trim();
         return (uEmail && wEmail === uEmail) || (uId && wUserId === uId);
-      })
-      .reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
+      });
 
+    const userWdSum = userWithdrawalsList.reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
     const totalWithdrawnVal = Math.max(
       userWdSum,
       parseFloat(currentUser?.totalWithdrawn || '0') || 0
@@ -358,13 +358,17 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       const elapsedSeconds = Math.max(1, (now - effStartMs) / 1000);
       const grossAccrued = perSecondRate * elapsedSeconds;
 
-      // Strict deduction of withdrawn dollars from Total Earned Profit
+      // Strict permanent deduction of all withdrawn dollars:
       const netAccrued = grossAccrued - totalWithdrawnVal;
 
-      // Continuous non-stopping meter:
       let effectiveYield = netAccrued;
       if (effectiveYield <= 0 && totalDep > 0) {
-        effectiveYield = Math.max(0.000001, ((now % 86400000) / 1000) * perSecondRate);
+        // If withdrawn amount exceeds or equals gross accrued, start fresh ticking from last withdrawal time
+        const lastWdTime = userWithdrawalsList.length > 0
+          ? Math.max(...userWithdrawalsList.map((w) => new Date(w.createdAt || 0).getTime()))
+          : effStartMs;
+        const elapsedSinceWd = Math.max(1, (now - (lastWdTime > 0 ? lastWdTime : effStartMs)) / 1000);
+        effectiveYield = Math.max(0.000001, elapsedSinceWd * perSecondRate);
       }
       return effectiveYield;
     };

@@ -594,6 +594,8 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
       if (userDocData.depositStartTime && Number(userDocData.depositStartTime) > 0) {
         canonicalUser.depositStartTime = Number(userDocData.depositStartTime);
       }
+      const totalWithdrawnBN = maxWithdrawnBN;
+
       const docBase = userDocData.baseEarnedYield !== undefined ? new BigNumber(userDocData.baseEarnedYield) : new BigNumber(0);
       const inMemBase = new BigNumber(canonicalUser.baseEarnedYield || '0');
       const docYield = userDocData.earnedYield !== undefined ? new BigNumber(userDocData.earnedYield) : new BigNumber(0);
@@ -611,12 +613,13 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
       const ratePerSec = new BigNumber(totalDepNum).multipliedBy(new BigNumber(monthlyRate).dividedBy(30).dividedBy(100).dividedBy(86400));
       const elapsed = Math.max(0, nowSec - depStartSec);
       const incrementalYield = ratePerSec.multipliedBy(elapsed);
-      const totalYieldBN = baseYieldBN.plus(incrementalYield);
+      const grossYieldBN = baseYieldBN.plus(incrementalYield);
+      const netYieldBN = BigNumber.max(0, grossYieldBN.minus(totalWithdrawnBN));
 
-      canonicalUser.earnedYield = totalYieldBN.toFixed(18);
-      canonicalUser.dailyProfit = totalYieldBN.toNumber();
+      canonicalUser.earnedYield = netYieldBN.toFixed(18);
+      canonicalUser.dailyProfit = netYieldBN.toNumber();
       (canonicalUser as any).totalDeposit = totalDepNum;
-      (canonicalUser as any).totalBalance = Math.max(0, totalDepNum + totalYieldBN.toNumber());
+      (canonicalUser as any).totalBalance = Math.max(0, totalDepNum + netYieldBN.toNumber());
 
       if (userDocData.activeInvestment) {
         canonicalUser.activeInvestment = userDocData.activeInvestment;
@@ -2381,9 +2384,12 @@ app.get('/api/dashboard/state', async (req: Request, res: Response) => {
       } else {
         activeUser.principalBalance = totalEffectivePrincipalBN.toFixed(18);
         activeUser.totalWithdrawn = maxWithdrawnBN.toFixed(18);
-        activeUser.earnedYield = activeUser.earnedYield || '0.000000000000000000';
+        const grossEarnedBN = new BigNumber(activeUser.earnedYield || '0');
+        const netEarnedBN = BigNumber.max(0, grossEarnedBN.minus(maxWithdrawnBN));
+        activeUser.earnedYield = netEarnedBN.toFixed(18);
+        activeUser.dailyProfit = netEarnedBN.toNumber();
         const pBalNum = totalEffectivePrincipalBN.toNumber();
-        const earnedNum = new BigNumber(activeUser.earnedYield).toNumber();
+        const earnedNum = netEarnedBN.toNumber();
         (activeUser as any).totalDeposit = pBalNum;
         (activeUser as any).totalBalance = Math.max(0, pBalNum + earnedNum);
       }

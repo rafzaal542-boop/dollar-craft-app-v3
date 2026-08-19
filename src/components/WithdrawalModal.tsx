@@ -89,8 +89,8 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
       const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
       const elapsedSeconds = Math.max(1, (Date.now() - effStartMs) / 1000);
 
-      // Sum of user withdrawals (including pending and approved, excluding rejected)
-      const userWdSum = (transactions || [])
+      // User's specific withdrawals
+      const userWdList = (transactions || [])
         .filter((w: any) => {
           const tEmail = (w.userEmail || w.email || '').toLowerCase().trim();
           const tId = (w.userId || '').trim();
@@ -98,9 +98,9 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
           const uId = (currentUser?.id || '').trim();
           const isUserMatch = (uEmail && tEmail === uEmail) || (uId && tId === uId);
           return isUserMatch && w.status !== 'REJECTED';
-        })
-        .reduce((sum: number, w: any) => sum + (parseFloat(w.amount || '0') || 0), 0);
+        });
 
+      const userWdSum = userWdList.reduce((sum: number, w: any) => sum + (parseFloat(w.amount || '0') || 0), 0);
       const totalWithdrawnVal = Math.max(
         userWdSum,
         parseFloat(currentUser?.totalWithdrawn || '0') || 0
@@ -111,7 +111,11 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
       let effectiveYield = netAccrued;
       if (effectiveYield <= 0 && totalDep > 0) {
-        effectiveYield = Math.max(0.000001, ((Date.now() % 86400000) / 1000) * perSecondRate);
+        const lastWdTime = userWdList.length > 0
+          ? Math.max(...userWdList.map((w: any) => new Date(w.createdAt || 0).getTime()))
+          : effStartMs;
+        const elapsedSinceWd = Math.max(1, (Date.now() - (lastWdTime > 0 ? lastWdTime : effStartMs)) / 1000);
+        effectiveYield = Math.max(0.000001, elapsedSinceWd * perSecondRate);
       }
       return effectiveYield;
     };

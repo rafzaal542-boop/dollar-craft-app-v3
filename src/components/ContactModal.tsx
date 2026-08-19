@@ -157,6 +157,38 @@ export const ContactModal: React.FC<ContactModalProps> = ({
                 </div>
               </div>
 
+              {/* Messenger Support Row */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-slate-800/80 pt-3 gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center p-2 shrink-0">
+                    <svg viewBox="0 0 24 24" className="w-6 h-6 fill-[#0084FF]" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 2C6.477 2 2 6.145 2 11.258c0 2.908 1.45 5.508 3.722 7.152.193.139.314.359.324.598l.063 1.868a.8.8 0 0 0 1.157.712l2.083-.923a.81.81 0 0 1 .533-.038c.683.189 1.397.29 2.118.29 5.523 0 10-4.145 10-9.258C22 6.145 17.523 2 12 2Zm5.187 7.734-2.825 4.475a1.2 1.2 0 0 1-1.683.333l-2.25-1.688a.4.4 0 0 0-.48 0l-3.042 2.31c-.41.312-.962-.16-.713-.604l2.825-4.475a1.2 1.2 0 0 1 1.683-.333l2.25 1.688a.4.4 0 0 0 .48 0l3.042-2.31c.41-.312.962.16.713.604Z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-mono font-bold text-slate-400 uppercase">Live Messenger Support</h4>
+                    <span className="text-sm text-blue-400 font-mono font-bold mt-0.5 block">
+                      Facebook Messenger
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:items-end items-start gap-1">
+                  <a
+                    href="https://www.facebook.com/share/18zs5yvUw3"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black rounded-xl text-xs font-mono flex items-center gap-2 shadow-md shadow-blue-500/25 transition-all cursor-pointer hover:scale-[1.03] active:scale-[0.98]"
+                  >
+                    <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current shrink-0" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 2C6.477 2 2 6.145 2 11.258c0 2.908 1.45 5.508 3.722 7.152.193.139.314.359.324.598l.063 1.868a.8.8 0 0 0 1.157.712l2.083-.923a.81.81 0 0 1 .533-.038c.683.189 1.397.29 2.118.29 5.523 0 10-4.145 10-9.258C22 6.145 17.523 2 12 2Zm5.187 7.734-2.825 4.475a1.2 1.2 0 0 1-1.683.333l-2.25-1.688a.4.4 0 0 0-.48 0l-3.042 2.31c-.41.312-.962-.16-.713-.604l2.825-4.475a1.2 1.2 0 0 1 1.683-.333l2.25 1.688a.4.4 0 0 0 .48 0l3.042-2.31c.41-.312.962.16.713.604Z" />
+                    </svg>
+                    <span className="uppercase tracking-wide">Open Messenger</span>
+                    <ExternalLink className="w-3 h-3 stroke-[2.5]" />
+                  </a>
+                </div>
+              </div>
+
               <div className="flex items-start gap-3 border-t border-slate-800/80 pt-3">
                 <MapPin className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                 <div>

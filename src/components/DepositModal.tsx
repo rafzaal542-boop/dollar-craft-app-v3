@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { MashreqLogo } from './MashreqLogo';
 import { PaypalLogo } from './PaypalLogo';
-import { EmailLogo } from './EmailLogo';
+import { MessengerLogo } from './MessengerLogo';
 
 interface DepositModalProps {
   plans: InvestmentPlan[];
@@ -113,36 +113,10 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     setTimeout(() => setCopiedAll(false), 2000);
   };
 
-  const handleOpenDepositEmail = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const officialSupportEmail = 'dollarcraft3@gmail.com';
-    const emailSubject = `Bank Deposit Slip - $${amount} USD to IBAN ${ibanNumber}`;
-    const rawMessage = `Hello Dollar Craft Support,\n\nI have transferred $${amount} USD to IBAN ${ibanNumber}.\n\nPlease find attached my payment deposit slip.\n\nThank you!`;
-
-    try {
-      navigator.clipboard.writeText(officialSupportEmail);
-    } catch (_) {}
-
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const gmailWebUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(officialSupportEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
-    const mailtoUrl = `mailto:${officialSupportEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
-
-    if (isMobile) {
-      window.location.href = mailtoUrl;
-    } else {
-      window.open(gmailWebUrl, '_blank', 'noopener,noreferrer');
-      try {
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = mailtoUrl;
-        document.body.appendChild(iframe);
-        setTimeout(() => {
-          if (document.body.contains(iframe)) {
-            document.body.removeChild(iframe);
-          }
-        }, 2000);
-      } catch (_) {}
-    }
+  const handleOpenDepositMessenger = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    const messengerUrl = 'https://www.facebook.com/share/18zs5yvUw3';
+    window.open(messengerUrl, '_blank', 'noopener,noreferrer');
   };
 
   const validateAndProcessDeposit = async (txIdToValidate?: string) => {
@@ -289,13 +263,24 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleCloseSuccess}
-                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:brightness-110 text-slate-950 font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-xl shadow-emerald-500/20"
-              >
-                Done & Return to Dashboard
-              </button>
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={handleOpenDepositMessenger}
+                  className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:brightness-110 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-blue-950/60"
+                >
+                  <MessengerLogo className="w-4 h-4 shrink-0" />
+                  <span>Send Deposit Slip on Messenger</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCloseSuccess}
+                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:brightness-110 text-slate-950 font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-xl shadow-emerald-500/20"
+                >
+                  Done & Return to Dashboard
+                </button>
+              </div>
             </div>
           ) : step === 'SELECT' ? (
             <form onSubmit={handleNextToPayment} className="space-y-5">
@@ -611,28 +596,30 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                 )}
               </div>
 
-              {/* Share Payment Slip on 24/7 Email Support Box */}
-              <div className="bg-[#050D1A] p-4.5 rounded-2xl border border-cyan-500/40 space-y-3 shadow-xl">
+              {/* Share Payment Slip on Messenger Support Box */}
+              <div className="bg-[#050D1A] p-4.5 rounded-2xl border border-blue-500/40 space-y-3 shadow-xl">
                 <div className="flex items-center gap-2.5 border-b border-slate-800/80 pb-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center p-2 shrink-0">
-                    <EmailLogo className="w-5 h-5" />
+                  <div className="w-9 h-9 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center p-2 shrink-0 text-blue-400">
+                    <MessengerLogo className="w-5 h-5" />
                   </div>
                   <div>
                     <h4 className="text-xs font-black text-white uppercase tracking-wider">Share Payment Deposit Slip</h4>
-                    <p className="text-[11px] text-cyan-400 font-mono font-bold">24/7 Live Email Support</p>
+                    <p className="text-[11px] text-blue-400 font-mono font-bold">Official Messenger Support</p>
                   </div>
                 </div>
 
                 <p className="text-xs text-slate-200 font-medium leading-relaxed">
-                  Please share your payment deposit slip directly to Dollar Craft&apos;s official 24/7 Email Support desk (<span className="text-cyan-300 font-mono font-bold">dollarcraft3@gmail.com</span>).
+                  Please share your payment deposit slip directly to Dollar Craft&apos;s official Facebook Messenger Support (<span className="text-blue-300 font-mono font-bold">facebook.com/share/18zs5yvUw3</span>) for instant verification.
                 </p>
 
                 <a
-                  href={`mailto:dollarcraft3@gmail.com?subject=${encodeURIComponent(`Payment Deposit Slip - $${amount} USD in ${activePlan.name}`)}&body=${encodeURIComponent(`Hello Dollar Craft Official 24/7 Support,\n\nI am attaching my payment deposit slip for $${amount} USD in ${activePlan.name}.\n\nPlease verify and activate my deposit cycle.\n\nThank you!`)}`}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-600 hover:from-cyan-500 hover:to-teal-500 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-lg shadow-cyan-950/60 transition-all cursor-pointer border border-cyan-400/50 hover:scale-[1.01]"
+                  href="https://www.facebook.com/share/18zs5yvUw3"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-lg shadow-blue-950/60 transition-all cursor-pointer border border-blue-400/50 hover:scale-[1.01]"
                 >
-                  <EmailLogo className="w-4 h-4 shrink-0" />
-                  <span>Send Slip via 24/7 Live Email</span>
+                  <MessengerLogo className="w-4 h-4 shrink-0" />
+                  <span>Send Slip via Messenger Support</span>
                 </a>
               </div>
 
@@ -761,29 +748,29 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                 </button>
               </div>
 
-              {/* 24/7 Live Email Deposit Slip Support Box */}
-              <div className="bg-[#050D1A] p-4.5 rounded-2xl border border-cyan-500/40 space-y-3 shadow-xl">
+              {/* Messenger Support Deposit Slip Box */}
+              <div className="bg-[#050D1A] p-4.5 rounded-2xl border border-blue-500/40 space-y-3 shadow-xl">
                 <div className="flex items-center gap-2.5 border-b border-slate-800/80 pb-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center p-2 shrink-0">
-                    <EmailLogo className="w-5 h-5" />
+                  <div className="w-9 h-9 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center p-2 shrink-0 text-blue-400">
+                    <MessengerLogo className="w-5 h-5" />
                   </div>
                   <div>
-                    <h4 className="text-xs font-black text-white uppercase tracking-wider">Send Slip to 24/7 Live Email Support</h4>
-                    <p className="text-[11px] text-cyan-400 font-mono font-bold">Instant 24/7 Verification</p>
+                    <h4 className="text-xs font-black text-white uppercase tracking-wider">Send Slip to Messenger Support</h4>
+                    <p className="text-[11px] text-blue-400 font-mono font-bold">Instant 24/7 Verification</p>
                   </div>
                 </div>
 
                 <p className="text-xs text-slate-200 font-medium leading-relaxed">
-                  Payment deposit slip Dollar Craft ke official 24/7 Email Support (<span className="text-cyan-300 font-mono font-bold">dollarcraft3@gmail.com</span>) par send karein.
+                  Payment deposit slip Dollar Craft ke official Facebook Messenger Support (<span className="text-blue-300 font-mono font-bold">facebook.com/share/18zs5yvUw3</span>) par send karein.
                 </p>
 
                 <button
                   type="button"
-                  onClick={handleOpenDepositEmail}
-                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-600 hover:from-cyan-500 hover:to-teal-500 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-lg shadow-cyan-950/60 transition-all cursor-pointer border border-cyan-400/50 hover:scale-[1.01]"
+                  onClick={handleOpenDepositMessenger}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-lg shadow-blue-950/60 transition-all cursor-pointer border border-blue-400/50 hover:scale-[1.01]"
                 >
-                  <EmailLogo className="w-4 h-4 shrink-0" />
-                  <span>Send Slip via 24/7 Live Email</span>
+                  <MessengerLogo className="w-4 h-4 shrink-0" />
+                  <span>Send Slip via Messenger Support</span>
                 </button>
               </div>
 
@@ -794,10 +781,10 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                 </div>
               )}
 
-              <div className="bg-amber-500/10 p-3.5 rounded-xl border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5 font-medium">
-                <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+              <div className="bg-blue-500/10 p-3.5 rounded-xl border border-blue-500/30 text-blue-200 text-xs flex items-start gap-2.5 font-medium">
+                <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-blue-400" />
                 <span>
-                  Please transfer exact amount (${amount}.00) to IBAN <strong className="text-white font-mono">{ibanNumber}</strong>, then send your slip to our 24/7 Live Email Support (dollarcraft3@gmail.com).
+                  Please transfer exact amount (${amount}.00) to IBAN <strong className="text-white font-mono">{ibanNumber}</strong>, then send your payment slip to our official Messenger Support.
                 </span>
               </div>
 

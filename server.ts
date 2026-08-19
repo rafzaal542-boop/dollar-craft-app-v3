@@ -560,6 +560,9 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
       }
       const docBase = userDocData.baseEarnedYield !== undefined ? new BigNumber(userDocData.baseEarnedYield) : new BigNumber(0);
       const inMemBase = new BigNumber(canonicalUser.baseEarnedYield || '0');
+      const docYield = userDocData.earnedYield !== undefined ? new BigNumber(userDocData.earnedYield) : new BigNumber(0);
+      const inMemYield = new BigNumber((canonicalUser as any).earnedYield || '0');
+      const inMemProfit = new BigNumber((canonicalUser as any).totalProfit || '0');
       const baseYieldBN = BigNumber.max(docBase, inMemBase, docYield, inMemYield, inMemProfit);
       canonicalUser.baseEarnedYield = baseYieldBN.toFixed(18);
 

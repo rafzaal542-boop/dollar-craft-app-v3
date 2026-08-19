@@ -27,6 +27,7 @@ import { LegalModal } from './components/LegalModal';
 import { LiveEarningsModal } from './components/LiveEarningsModal';
 import { WelcomeIntro } from './components/WelcomeIntro';
 import { Logo } from './components/Logo';
+import { MessengerSupportButton } from './components/MessengerSupportButton';
 import { INITIAL_PLANS } from './data/mockData';
 import { AccessDeniedModal } from './components/AccessDeniedModal';
 import { 
@@ -1674,6 +1675,9 @@ export default function App() {
         onClose={() => setIsLegalOpen(false)}
         defaultTab={legalTab}
       />
+
+      {/* Floating Messenger Support Button */}
+      <MessengerSupportButton />
 
     </div>
   );

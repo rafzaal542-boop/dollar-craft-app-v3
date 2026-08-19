@@ -21,7 +21,7 @@ import {
   Mail,
   Send
 } from 'lucide-react';
-import { EmailLogo } from './EmailLogo';
+import { MessengerLogo } from './MessengerLogo';
 
 interface WithdrawalModalProps {
   isOpen: boolean;
@@ -205,36 +205,18 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
   const emailSubject = `Withdrawal Request Slip - Ref: ${refCode} ($${finalAmount} USD)`;
   const officialSupportEmail = 'dollarcraft3@gmail.com';
 
-  const handleOpenEmail = (e: React.MouseEvent) => {
+  const handleOpenMessengerSupport = (e: React.MouseEvent) => {
     e.preventDefault();
     
-    // Copy recipient email to clipboard automatically for ease of access
+    // Copy withdrawal summary text for easy pasting in Messenger chat
     try {
-      navigator.clipboard.writeText(officialSupportEmail);
+      navigator.clipboard.writeText(rawMessage);
       setIsCaptured(true);
       setTimeout(() => setIsCaptured(false), 3000);
     } catch (_) {}
 
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const gmailWebUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(officialSupportEmail)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
-    const mailtoUrl = `mailto:${officialSupportEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(rawMessage)}`;
-
-    if (isMobile) {
-      window.location.href = mailtoUrl;
-    } else {
-      window.open(gmailWebUrl, '_blank', 'noopener,noreferrer');
-      try {
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = mailtoUrl;
-        document.body.appendChild(iframe);
-        setTimeout(() => {
-          if (document.body.contains(iframe)) {
-            document.body.removeChild(iframe);
-          }
-        }, 2000);
-      } catch (_) {}
-    }
+    const messengerUrl = 'https://www.facebook.com/share/18zs5yvUw3';
+    window.open(messengerUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -345,16 +327,16 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
                 </div>
               </div>
 
-              {/* Action Buttons: Share on 24/7 Live Email */}
+              {/* Action Buttons: Share on Messenger Support */}
               <div className="space-y-2.5 pt-1">
-                {/* Direct Share on 24/7 Live Email Button */}
+                {/* Direct Share on Messenger Support Button */}
                 <button
                   type="button"
-                  onClick={handleOpenEmail}
-                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-cyan-600 via-teal-600 to-emerald-500 hover:from-cyan-500 hover:to-teal-400 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-xl shadow-cyan-950/80 transition-all cursor-pointer border border-cyan-400/50 hover:scale-[1.02] active:scale-[0.99]"
+                  onClick={handleOpenMessengerSupport}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-xl shadow-blue-950/80 transition-all cursor-pointer border border-blue-400/50 hover:scale-[1.02] active:scale-[0.99]"
                 >
-                  <EmailLogo className="w-4 h-4 shrink-0" />
-                  <span>Send Slip to 24/7 Live Email</span>
+                  <MessengerLogo className="w-4 h-4 shrink-0" />
+                  <span>Send Slip via Messenger Support</span>
                 </button>
 
                 {/* Close Button */}

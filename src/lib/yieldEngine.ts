@@ -49,8 +49,10 @@ export function calculateServerTimestampYield(
   const mRate = new BigNumber(monthlyYieldPercent || 25);
   const baseBN = new BigNumber(baseEarnedYield || 0);
 
+  const withdrawnBN = new BigNumber(totalWithdrawn || 0);
+
   if (mRate.isLessThanOrEqualTo(0)) {
-    const netYield = BigNumber.max(0, baseBN);
+    const netYield = BigNumber.max(0, baseBN.minus(withdrawnBN));
     const displayBalance = BigNumber.max(0, depositBN.plus(netYield));
     return {
       accumulatedProfit: netYield,
@@ -79,16 +81,19 @@ export function calculateServerTimestampYield(
   }
   const elapsedSeconds = Math.max(0, currSec - startSec);
 
-  // Exact formula: accruedYield = (totalDeposit * dailyRate * elapsedSeconds) / 86400 + baseEarnedYield
+  // Exact canonical formula: Gross = baseEarnedYield + (totalDeposit * dailyRate * elapsedSeconds) / 86400
   const incrementalYield = yieldPerSec.multipliedBy(elapsedSeconds);
-  const accumulatedProfit = BigNumber.max(0, baseBN.plus(incrementalYield));
+  const grossYield = baseBN.plus(incrementalYield);
+  // Net available profit after subtracting approved withdrawals:
+  const netYield = BigNumber.max(0, grossYield.minus(withdrawnBN));
+  const accumulatedProfit = netYield;
   const displayBalance = BigNumber.max(0, depositBN.plus(accumulatedProfit));
 
   return {
     accumulatedProfit,
     accruedYield: accumulatedProfit,
-    grossYield: accumulatedProfit,
-    netYield: accumulatedProfit,
+    grossYield,
+    netYield,
     displayBalance,
     elapsedSeconds,
     yieldPerSecond: yieldPerSec
@@ -269,27 +274,6 @@ export function resolveCanonicalDepositStartTime(
   deposits?: Array<Partial<UserDeposit>> | null
 ): number {
   const nowSec = Math.floor(Date.now() / 1000);
-
-  // 1. Authoritative Anchor: user.depositStartTime corresponds to baseEarnedYield (e.g. after a withdrawal or deposit)
-  if (user?.depositStartTime) {
-    const sec = typeof user.depositStartTime === 'number'
-      ? (user.depositStartTime > 100000000000 ? Math.floor(user.depositStartTime / 1000) : Math.floor(user.depositStartTime))
-      : Number(user.depositStartTime);
-    if (!isNaN(sec) && sec > 0 && sec <= nowSec) {
-      return sec;
-    }
-  }
-
-  // 2. Active investment anchor
-  if (activeInvestment?.depositStartTime) {
-    const sec = typeof activeInvestment.depositStartTime === 'number'
-      ? (activeInvestment.depositStartTime > 100000000000 ? Math.floor(activeInvestment.depositStartTime / 1000) : Math.floor(activeInvestment.depositStartTime))
-      : Number(activeInvestment.depositStartTime);
-    if (!isNaN(sec) && sec > 0 && sec <= nowSec) {
-      return sec;
-    }
-  }
-
   const candidates: number[] = [];
 
   const addCandidate = (val: any) => {
@@ -313,21 +297,29 @@ export function resolveCanonicalDepositStartTime(
     }
   };
 
+  if (user?.depositStartTime) {
+    addCandidate(user.depositStartTime);
+  }
+  if (activeInvestment?.depositStartTime) {
+    addCandidate(activeInvestment.depositStartTime);
+  }
   if (activeInvestment?.activationTimestamp) {
     addCandidate(activeInvestment.activationTimestamp);
   }
-
   if (Array.isArray(deposits)) {
     deposits.forEach((d) => {
       if (d) {
         addCandidate(d.startTime);
         addCandidate((d as any).depositStartTime);
+        addCandidate((d as any).createdAt);
       }
     });
   }
-
   if (user?.createdAt) {
     addCandidate(user.createdAt);
+  }
+  if (user?.joinedDate) {
+    addCandidate(user.joinedDate);
   }
 
   if (candidates.length > 0) {
@@ -452,9 +444,7 @@ export function reconcileUserOfflineYield(
   // Determine depositStartTime & baseEarnedYield (immutable earliest anchor)
   const nowSec = Math.floor(now / 1000);
   const depositStartSec = resolveCanonicalDepositStartTime(user, inv);
-  let baseYieldStr = (user.baseEarnedYield && user.baseEarnedYield !== '0.000000000000000000') 
-    ? user.baseEarnedYield 
-    : (savedAccumulatedProfitStr || '0.000000000000000000');
+  const baseYieldStr = '0.000000000000000000';
 
   const monthlyRate = inv.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
   const yieldRes = calculateServerTimestampYield(

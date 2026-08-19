@@ -754,30 +754,16 @@ export default function App() {
             : '0.000000000000000000';
 
           setUser((prevUser) => {
-            if (!prevUser) {
-              localStorage.setItem('dollarcraft_active_user', JSON.stringify(data.user));
-              return data.user;
-            }
-
-            const prevEmail = (prevUser.email || '').toLowerCase().trim();
-            const dataEmail = (data.user.email || '').toLowerCase().trim();
-
-            // Strict User Isolation: If user emails do not match, discard prevUser completely!
-            if (prevEmail && dataEmail && prevEmail !== dataEmail) {
-              localStorage.setItem('dollarcraft_active_user', JSON.stringify(data.user));
-              return data.user;
-            }
-
             const incomingBalBN = new BigNumber(data.user.principalBalance || '0');
             const incomingWithdrawnBN = new BigNumber(data.user.totalWithdrawn || '0');
-            const prevWithdrawnBN = new BigNumber(prevUser.totalWithdrawn || '0');
+            const prevWithdrawnBN = new BigNumber(prevUser?.totalWithdrawn || '0');
             const maxWithdrawnBN = BigNumber.max(incomingWithdrawnBN, prevWithdrawnBN);
 
             const totalDepNum = Math.max(0, Number(data.user.totalDeposit || incomingBalBN.toNumber()));
 
             const effDepositStart = resolveCanonicalDepositStartTime(
-              { ...prevUser, ...data.user },
-              data.user.activeInvestment || prevUser.activeInvestment,
+              prevUser ? { ...prevUser, ...data.user } : data.user,
+              data.user.activeInvestment || prevUser?.activeInvestment,
               data.deposits || deposits
             );
 
@@ -791,9 +777,47 @@ export default function App() {
               maxWithdrawnBN
             );
 
-            const finalYieldBN = yieldRes.accumulatedProfit;
+            const finalYieldBN = BigNumber.max(yieldRes.accumulatedProfit, new BigNumber(data.user.earnedYield || 0), new BigNumber(data.user.dailyProfit || 0));
             const finalYieldStr = finalYieldBN.toFixed(18);
             const totalBalNum = Math.max(0, totalDepNum + finalYieldBN.toNumber());
+
+            lastRenderedYieldRef.current = finalYieldBN;
+
+            if (!prevUser) {
+              const freshUser: User = {
+                ...data.user,
+                principalBalance: incomingBalBN.toFixed(18),
+                earnedYield: finalYieldStr,
+                dailyProfit: finalYieldBN.toNumber(),
+                totalWithdrawn: maxWithdrawnBN.toFixed(18),
+                totalDeposit: totalDepNum,
+                totalBalance: totalBalNum,
+                depositStartTime: effDepositStart,
+                baseEarnedYield: '0.000000000000000000'
+              };
+              localStorage.setItem('dollarcraft_active_user', JSON.stringify(freshUser));
+              return freshUser;
+            }
+
+            const prevEmail = (prevUser.email || '').toLowerCase().trim();
+            const dataEmail = (data.user.email || '').toLowerCase().trim();
+
+            // Strict User Isolation: If user emails do not match, discard prevUser completely!
+            if (prevEmail && dataEmail && prevEmail !== dataEmail) {
+              const freshUser: User = {
+                ...data.user,
+                principalBalance: incomingBalBN.toFixed(18),
+                earnedYield: finalYieldStr,
+                dailyProfit: finalYieldBN.toNumber(),
+                totalWithdrawn: maxWithdrawnBN.toFixed(18),
+                totalDeposit: totalDepNum,
+                totalBalance: totalBalNum,
+                depositStartTime: effDepositStart,
+                baseEarnedYield: '0.000000000000000000'
+              };
+              localStorage.setItem('dollarcraft_active_user', JSON.stringify(freshUser));
+              return freshUser;
+            }
 
             const mergedUser: User = {
               ...prevUser,

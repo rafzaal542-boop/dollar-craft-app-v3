@@ -340,13 +340,12 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
   });
   const canonicalDepStartSec = startCandidates.length > 0 ? Math.min(...startCandidates) : nowSecForConsolidation;
   canonicalUser.depositStartTime = canonicalDepStartSec;
-  const baseYieldBN = BigNumber.max(new BigNumber(canonicalUser.baseEarnedYield || '0'), maxEarnedBN);
-  canonicalUser.baseEarnedYield = baseYieldBN.toFixed(18);
 
   if (effectivePrincipal.isLessThanOrEqualTo(0)) {
     canonicalUser.principalBalance = '0.000000000000000000';
     canonicalUser.earnedYield = '0.000000000000000000';
     canonicalUser.dailyProfit = 0;
+    canonicalUser.baseEarnedYield = '0.000000000000000000';
     (canonicalUser as any).totalDeposit = 0;
     (canonicalUser as any).totalBalance = 0;
     canonicalUser.activeInvestment = null;
@@ -357,13 +356,15 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
     const monthlyRate = canonPBalNum >= 1001 ? 35 : (canonPBalNum >= 501 ? 30 : 25);
     const ratePerSec = effectivePrincipal.multipliedBy(new BigNumber(monthlyRate).dividedBy(30).dividedBy(100).dividedBy(86400));
     const elapsed = Math.max(0, nowSecForConsolidation - canonicalDepStartSec);
-    const incrementalAccrued = ratePerSec.multipliedBy(elapsed);
-    const totalYieldBN = baseYieldBN.plus(incrementalAccrued);
+    const grossAccrued = ratePerSec.multipliedBy(elapsed);
+    const calculatedNetBN = BigNumber.max(0, grossAccrued.minus(effectiveWithdrawnBN));
+    const netYieldBN = BigNumber.max(calculatedNetBN, maxEarnedBN);
 
-    canonicalUser.earnedYield = totalYieldBN.toFixed(18);
-    canonicalUser.dailyProfit = totalYieldBN.toNumber();
+    canonicalUser.earnedYield = netYieldBN.toFixed(18);
+    canonicalUser.dailyProfit = netYieldBN.toNumber();
+    canonicalUser.baseEarnedYield = '0.000000000000000000';
     (canonicalUser as any).totalDeposit = canonPBalNum;
-    (canonicalUser as any).totalBalance = Math.max(0, canonPBalNum + totalYieldBN.toNumber());
+    (canonicalUser as any).totalBalance = Math.max(0, canonPBalNum + netYieldBN.toNumber());
   }
 
   canonicalUser.ibWithdrawableCommission = maxIbBN.toFixed(2);
@@ -1890,68 +1891,31 @@ const handleGetAllUsers = async (req: Request, res: Response) => {
           if (d.is_ib !== undefined) existingUser.is_ib = !!d.is_ib;
           if (d.ibStatus) existingUser.ibStatus = d.ibStatus;
 
-          if (fsEmail === 'abdulha@gmail.com' || (existingUser.totalDeposit === 5000 && parseFloat(existingUser.totalWithdrawn || '0') >= 90)) {
-            existingUser.principalBalance = '5000.000000000000000000';
-            existingUser.totalDeposit = 5000;
-            existingUser.totalWithdrawn = '100.000000000000000000';
-            existingUser.earnedYield = '7.000000000000000000';
-            existingUser.baseEarnedYield = '7.000000000000000000';
-            existingUser.depositStartTime = Math.floor(Date.now() / 1000);
-            existingUser.dailyProfit = 7;
-            existingUser.totalBalance = 5007;
-
-            // Persist fix to Firestore
-            import('firebase/firestore').then(({ doc, setDoc }) => {
-              setDoc(doc(db, 'users', fsEmail), {
-                earnedYield: 7,
-                baseEarnedYield: '7.000000000000000000',
-                depositStartTime: Math.floor(Date.now() / 1000),
-                totalWithdrawn: 100,
-                totalDeposit: 5000,
-                principalBalance: 5000,
-                totalBalance: 5007,
-                dailyProfit: 7
-              }, { merge: true }).catch(() => {});
-            }).catch(() => {});
-          } else if (parseFloat(existingUser.totalWithdrawn || '0') === 0) {
-            let parsedCreatedSec = 0;
-            const cDate = existingUser.createdAt || d.createdAt || d.joinedDate || existingUser.joinedDate;
-            if (cDate) {
-              const t = new Date(cDate).getTime();
-              if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
-            }
-            if (parsedCreatedSec > 0) {
-              existingUser.depositStartTime = parsedCreatedSec;
-              existingUser.baseEarnedYield = '0.000000000000000000';
-            } else if (d.depositStartTime) {
-              existingUser.depositStartTime = Number(d.depositStartTime);
-            }
-          } else {
-            if (d.earnedYield !== undefined) existingUser.earnedYield = String(d.earnedYield);
-            if (d.dailyProfit !== undefined) existingUser.dailyProfit = Number(d.dailyProfit);
-            if (d.totalBalance !== undefined) existingUser.totalBalance = Number(d.totalBalance);
-          }
+          if (d.earnedYield !== undefined) existingUser.earnedYield = String(d.earnedYield);
+          if (d.dailyProfit !== undefined) existingUser.dailyProfit = Number(d.dailyProfit);
+          if (d.totalBalance !== undefined) existingUser.totalBalance = Number(d.totalBalance);
+          if (d.totalWithdrawn !== undefined) existingUser.totalWithdrawn = String(d.totalWithdrawn);
+          if (d.depositStartTime !== undefined && Number(d.depositStartTime) > 0) existingUser.depositStartTime = Number(d.depositStartTime);
         } else {
-          const isAbdulha = fsEmail === 'abdulha@gmail.com';
           mockUsers.push({
             id: fsId,
             email: fsEmail || `${docSnap.id}@user.com`,
             password: d.password || undefined,
             walletAddress: d.walletAddress || `0x${fsId.substring(0, 8)}`,
             role: d.role || 'USER (SILVER)',
-            tier: d.tier || (isAbdulha ? 'VIP' : 'SILVER'),
+            tier: d.tier || (Number(d.principalBalance || d.totalDeposit || 0) >= 1001 ? 'VIP' : (Number(d.principalBalance || d.totalDeposit || 0) >= 501 ? 'PREMIUM' : 'SILVER')),
             referralCode: d.referralCode || `DC${fsId.substring(0, 6).toUpperCase()}`,
             isFrozen: !!d.isFrozen,
-            createdAt: d.createdAt || d.created_at || d.joinedDate || (isAbdulha ? '2026-08-14T00:00:00.000Z' : new Date().toISOString()),
-            joinedDate: d.joinedDate || (d.createdAt ? d.createdAt.split('T')[0] : (isAbdulha ? '2026-08-14' : new Date().toISOString().split('T')[0])),
-            principalBalance: isAbdulha ? '5000.000000000000000000' : String(d.principalBalance || 0),
-            earnedYield: isAbdulha ? '7.000000000000000000' : String(d.earnedYield || 0),
-            baseEarnedYield: isAbdulha ? '7.000000000000000000' : (d.baseEarnedYield ? String(d.baseEarnedYield) : undefined),
-            depositStartTime: isAbdulha ? Math.floor(Date.now() / 1000) : (d.depositStartTime ? Number(d.depositStartTime) : undefined),
-            totalWithdrawn: isAbdulha ? '100.000000000000000000' : String(d.totalWithdrawn || 0),
-            totalDeposit: isAbdulha ? 5000 : (d.totalDeposit !== undefined ? Number(d.totalDeposit) : 0),
-            dailyProfit: isAbdulha ? 7 : (d.dailyProfit !== undefined ? Number(d.dailyProfit) : 0),
-            totalBalance: isAbdulha ? 5007 : (d.totalBalance !== undefined ? Number(d.totalBalance) : 0),
+            createdAt: d.createdAt || d.created_at || d.joinedDate || new Date().toISOString(),
+            joinedDate: d.joinedDate || (d.createdAt ? d.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),
+            principalBalance: String(d.principalBalance || d.totalDeposit || 0),
+            earnedYield: String(d.earnedYield || d.dailyProfit || 0),
+            baseEarnedYield: String(d.baseEarnedYield || '0.000000000000000000'),
+            depositStartTime: d.depositStartTime ? Number(d.depositStartTime) : undefined,
+            totalWithdrawn: String(d.totalWithdrawn || 0),
+            totalDeposit: Number(d.totalDeposit || d.principalBalance || 0),
+            dailyProfit: Number(d.dailyProfit || d.earnedYield || 0),
+            totalBalance: Number(d.totalBalance || 0),
             status: d.status || (d.isFrozen ? 'FROZEN' : 'ACTIVE'),
             is_ib: !!d.is_ib,
             ibStatus: d.ibStatus || 'NONE'

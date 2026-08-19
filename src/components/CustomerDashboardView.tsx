@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { User, UserDeposit, Transaction } from '../types';
-import { getPlanRates } from '../lib/yieldEngine';
+import { getPlanRates, calculateServerTimestampYield, resolveCanonicalDepositStartTime } from '../lib/yieldEngine';
 import { 
   User as UserIcon, 
   UserCheck, 
@@ -313,6 +313,15 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     return Math.max(userPrincipal, userTotalDep, depositSum, transferSum).toFixed(4);
   };
 
+  const [liveNowSec, setLiveNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLiveNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const lastRenderedProfitRef = React.useRef<number>(0);
   const prevEarnedYieldRef = React.useRef<string>(currentUser?.earnedYield || '0');
 
@@ -340,15 +349,37 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       return '0.000000';
     }
 
-    // High-precision realtime yield with smooth forward progression
-    const earnedYieldNum = parseFloat(currentUser.earnedYield || '0') || 0;
+    const effDepositStart = resolveCanonicalDepositStartTime(
+      currentUser,
+      currentUser.activeInvestment,
+      deposits
+    );
+
+    const monthlyRate = currentUser.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+    const totalWithdrawnVal = totalApprovedUSD || parseFloat(currentUser.totalWithdrawn || '0') || 0;
+
+    const yieldRes = calculateServerTimestampYield(
+      totalDep,
+      monthlyRate,
+      effDepositStart,
+      liveNowSec,
+      0,
+      totalWithdrawnVal
+    );
+
+    const calculatedProfit = yieldRes.accumulatedProfit.toNumber();
+    const serverYieldNum = parseFloat(currentUser.earnedYield || '0') || 0;
+    const effectiveTarget = Math.max(calculatedProfit, serverYieldNum);
+
     const prevParsed = parseFloat(prevEarnedYieldRef.current) || 0;
-    if (earnedYieldNum < prevParsed) {
-      lastRenderedProfitRef.current = earnedYieldNum;
-      prevEarnedYieldRef.current = currentUser.earnedYield || '0';
+    if (effectiveTarget < prevParsed && prevParsed - effectiveTarget > 1) {
+      lastRenderedProfitRef.current = effectiveTarget;
+      prevEarnedYieldRef.current = String(effectiveTarget);
     } else {
-      lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, earnedYieldNum);
+      lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, effectiveTarget);
+      prevEarnedYieldRef.current = String(lastRenderedProfitRef.current);
     }
+
     return lastRenderedProfitRef.current.toFixed(6);
   };
 

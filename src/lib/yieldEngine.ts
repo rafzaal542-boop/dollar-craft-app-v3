@@ -576,9 +576,30 @@ export function computeLiveUserAccruedProfit(
     return (uEmail && wEmail === uEmail) || (uId && wUserId === uId);
   });
 
+  let localWdSum = 0;
+  if (typeof window !== 'undefined' && uEmail) {
+    try {
+      const rawWd = localStorage.getItem('dollar_craft_withdrawals') || localStorage.getItem('dc_withdrawals');
+      if (rawWd) {
+        const parsed = JSON.parse(rawWd);
+        if (Array.isArray(parsed)) {
+          localWdSum = parsed
+            .filter((w: any) => {
+              if (w.status === 'REJECTED') return false;
+              const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
+              const wUserId = (w.userId || '').trim();
+              return (uEmail && wEmail === uEmail) || (uId && wUserId === uId);
+            })
+            .reduce((sum: number, w: any) => sum + (parseFloat(w.amount || '0') || 0), 0);
+        }
+      }
+    } catch (_) {}
+  }
+
   const userWdSum = userWdList.reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
   const totalWithdrawnVal = Math.max(
     userWdSum,
+    localWdSum,
     parseFloat(user.totalWithdrawn || '0') || 0
   );
 

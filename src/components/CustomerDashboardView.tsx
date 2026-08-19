@@ -36,11 +36,12 @@ interface CustomerDashboardViewProps {
   deposits?: UserDeposit[];
   transactions?: Transaction[];
   onOpenDeposit?: () => void;
-  onOpenWithdraw?: () => void;
+  onOpenWithdraw?: (liveProfit?: number) => void;
   onOpenMasterPlan?: () => void;
   onOpenAuth?: (mode?: 'login' | 'signup') => void;
   onOpenInternalTransfer?: () => void;
   onRefreshData?: () => void;
+  onSyncLiveProfit?: (liveProfit: number) => void;
 }
 
 export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
@@ -52,7 +53,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   onOpenMasterPlan,
   onOpenAuth,
   onOpenInternalTransfer,
-  onRefreshData
+  onRefreshData,
+  onSyncLiveProfit
 }) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'profile' | 'deposits' | 'transfers'>('profile');
@@ -327,18 +329,23 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     };
 
     // Immediate non-zero seed on mount/login
-    setLiveEarnedProfit(computeExact());
+    const initialVal = computeExact();
+    setLiveEarnedProfit(initialVal);
+    if (onSyncLiveProfit) onSyncLiveProfit(initialVal);
 
     // Active continuous 100ms ticker loop
     const timer = setInterval(() => {
-      setLiveEarnedProfit(computeExact());
+      const val = computeExact();
+      setLiveEarnedProfit(val);
+      if (onSyncLiveProfit) onSyncLiveProfit(val);
     }, 100);
 
     return () => clearInterval(timer);
   }, [
     currentUser,
     displayWithdrawals,
-    deposits
+    deposits,
+    onSyncLiveProfit
   ]);
 
   const getCalculatedDailyProfit = (): string => {
@@ -554,7 +561,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               </button>
 
               <button
-                onClick={onOpenWithdraw}
+                onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
                 className="p-3.5 rounded-2xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer hover:scale-[1.02] active:scale-95 shadow-md shadow-cyan-950/30"
               >
                 <ArrowUpRight className="w-4 h-4 text-cyan-400" />

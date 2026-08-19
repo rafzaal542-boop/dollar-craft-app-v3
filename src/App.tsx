@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { User, UserDeposit, Transaction, ReferralReward, SystemMetrics, InvestmentPlan, ActiveInvestment } from './types';
-import { BigNumber, formatCurrency, formatPrecision, calculateMicroYield, calculateYieldPerSecond, calculateServerTimestampYield, getPlanRates, reconcileUserOfflineYield, resolveCanonicalDepositStartTime } from './lib/yieldEngine';
+import { BigNumber, formatCurrency, formatPrecision, calculateMicroYield, calculateYieldPerSecond, calculateServerTimestampYield, getPlanRates, reconcileUserOfflineYield, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit } from './lib/yieldEngine';
 import { Header } from './components/Header';
 import { LiveBalanceTicker } from './components/LiveBalanceTicker';
 import { ActiveCyclesTable } from './components/ActiveCyclesTable';
@@ -557,6 +557,24 @@ export default function App() {
 
   // Real-time calculation variables for UI tick rate
   const [isLiveStreaming, setIsLiveStreaming] = useState<boolean>(true);
+  const [globalLiveProfit, setGlobalLiveProfit] = useState<number>(0);
+
+  // Global Continuous 100ms Ticker for absolute parity across all views & modals
+  useEffect(() => {
+    if (!user) {
+      setGlobalLiveProfit(0);
+      return;
+    }
+
+    const tick = () => {
+      const liveVal = computeLiveUserAccruedProfit(user, deposits, transactions);
+      setGlobalLiveProfit(liveVal);
+    };
+
+    tick();
+    const interval = setInterval(tick, 100);
+    return () => clearInterval(interval);
+  }, [user, deposits, transactions]);
 
   // Theme State (Dark Mode vs High-Contrast Light Mode)
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -1461,10 +1479,20 @@ export default function App() {
             deposits={deposits}
             transactions={transactions}
             onOpenDeposit={() => setIsDepositOpen(true)}
-            onOpenWithdraw={() => setIsWithdrawalOpen(true)}
+            onOpenWithdraw={(liveVal?: number) => {
+              if (typeof liveVal === 'number' && liveVal >= 0) {
+                setGlobalLiveProfit(liveVal);
+              }
+              setIsWithdrawalOpen(true);
+            }}
             onOpenMasterPlan={() => setIsMasterPlanOpen(true)}
             onOpenAuth={handleOpenAuth}
             onRefreshData={fetchState}
+            onSyncLiveProfit={(liveVal: number) => {
+              if (typeof liveVal === 'number' && liveVal >= 0) {
+                setGlobalLiveProfit(liveVal);
+              }
+            }}
           />
         )}
 
@@ -1627,6 +1655,7 @@ export default function App() {
         currentUser={user}
         deposits={deposits}
         transactions={transactions}
+        liveEarnedProfit={globalLiveProfit}
         onSubmitWithdrawal={handleSubmitWithdrawal}
       />
 

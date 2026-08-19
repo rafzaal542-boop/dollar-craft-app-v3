@@ -146,28 +146,33 @@ export const DollarCraftDashboard: React.FC<DollarCraftDashboardProps> = ({
   const [isTickActive] = useState<boolean>(true);
   const [tickSpeedMs] = useState<number>(60); // 60ms Ultra High-Frequency Smooth Ticker
 
-  // Persist current balance and timestamp whenever balance updates or tab closes
-  useEffect(() => {
-    localStorage.setItem(STORAGE_BAL, liveBalance);
-    localStorage.setItem(STORAGE_YIELD, totalYield);
-    localStorage.setItem(STORAGE_TIME, Date.now().toString());
-  }, [liveBalance, totalYield]);
+  const liveBalanceRef = React.useRef(liveBalance);
+  const totalYieldRef = React.useRef(totalYield);
 
   useEffect(() => {
+    liveBalanceRef.current = liveBalance;
+    totalYieldRef.current = totalYield;
+  }, [liveBalance, totalYield]);
+
+  // Persist current balance periodically and on page leave
+  useEffect(() => {
     const handleSaveOnLeave = () => {
-      localStorage.setItem(STORAGE_BAL, liveBalance);
-      localStorage.setItem(STORAGE_YIELD, totalYield);
+      localStorage.setItem(STORAGE_BAL, liveBalanceRef.current);
+      localStorage.setItem(STORAGE_YIELD, totalYieldRef.current);
       localStorage.setItem(STORAGE_TIME, Date.now().toString());
     };
 
+    const persistInterval = setInterval(handleSaveOnLeave, 5000);
     window.addEventListener("beforeunload", handleSaveOnLeave);
     document.addEventListener("visibilitychange", handleSaveOnLeave);
 
     return () => {
+      clearInterval(persistInterval);
+      handleSaveOnLeave();
       window.removeEventListener("beforeunload", handleSaveOnLeave);
       document.removeEventListener("visibilitychange", handleSaveOnLeave);
     };
-  }, [liveBalance, totalYield]);
+  }, []);
 
   const countries = [
     { flag: '🇺🇸', code: 'us', name: 'USA', detail: 'SEC Registered' },

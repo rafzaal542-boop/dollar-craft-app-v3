@@ -67,53 +67,6 @@ export default function App() {
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Active Investment Object & Rate for Non-Stop Profit Engine
-  const [microYieldPerSecond, setMicroYieldPerSecond] = useState<string>('0');
-  const [activeInvestment, setActiveInvestment] = useState<ActiveInvestment | null>(() => {
-    try {
-      const savedUser = localStorage.getItem('dollarcraft_active_user');
-      if (savedUser) {
-        const pUser = JSON.parse(savedUser);
-        if (pUser?.id) {
-          const invKey = `dollarcraft_active_investment_${pUser.id}`;
-          const rawInv = localStorage.getItem(invKey);
-          if (rawInv) return JSON.parse(rawInv);
-        }
-      }
-    } catch (e) {}
-    return null;
-  });
-
-  // Reconcile offline non-stop yield calculation immediately upon page load / login
-  useEffect(() => {
-    if (!user) return;
-
-    let inv = activeInvestment;
-    if (!inv && user.id) {
-      try {
-        const invKey = `dollarcraft_active_investment_${user.id}`;
-        const rawInv = localStorage.getItem(invKey);
-        if (rawInv) {
-          inv = JSON.parse(rawInv);
-          setActiveInvestment(inv);
-        }
-      } catch (e) {}
-    }
-
-    const res = reconcileUserOfflineYield(user, inv);
-    if (res.updatedInvestment) {
-      setActiveInvestment(res.updatedInvestment);
-      if (user.id) {
-        localStorage.setItem(`dollarcraft_active_investment_${user.id}`, JSON.stringify(res.updatedInvestment));
-      }
-    }
-
-    if (res.updatedUser && res.updatedUser.earnedYield !== user.earnedYield) {
-      setUser(res.updatedUser);
-      localStorage.setItem('dollarcraft_active_user', JSON.stringify(res.updatedUser));
-    }
-  }, [user?.id, user?.email]);
-
   // Ref counter for periodic cloud sync
   const fsSyncTickRef = React.useRef(0);
   // Strict Monotonic Clamp Ref: Guarantees yield strictly increments forward and NEVER decreases or flickers
@@ -133,7 +86,7 @@ export default function App() {
       if (document.visibilityState === 'visible' && user) {
         setUser((prev) => {
           if (!prev) return prev;
-          const res = reconcileUserOfflineYield(prev, activeInvestment || prev.activeInvestment);
+          const res = reconcileUserOfflineYield(prev, prev.activeInvestment);
           if (res.updatedUser) {
             const calculatedBN = new BigNumber(res.updatedUser.earnedYield || '0');
             lastRenderedYieldRef.current = BigNumber.max(lastRenderedYieldRef.current, calculatedBN);
@@ -150,11 +103,11 @@ export default function App() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [user?.id, user?.email, activeInvestment]);
+  }, [user?.id, user?.email]);
 
   // Unified Single Global Real-Time Accruals Loop using Deterministic Server-Timestamp Formula
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id && !user?.email) return;
 
     const interval = setInterval(() => {
       setUser((prevUser) => {
@@ -166,17 +119,11 @@ export default function App() {
         );
         const pBal = Math.max(parseFloat(prevUser.principalBalance || '0') || 0, activeDepositSum);
         const totalDep = Math.max(Number(prevUser.totalDeposit || 0), pBal, activeDepositSum);
-        let currentInv = activeInvestment || prevUser.activeInvestment;
+        let currentInv = prevUser.activeInvestment;
 
         // Zero Deposit Hard Guard: If totalDeposit <= 0, dailyProfit MUST be 0.0000 & totalBalance MUST be 0.0000
         if (totalDep <= 0) {
           lastRenderedYieldRef.current = new BigNumber(0);
-          if (microYieldPerSecond !== '0') {
-            setMicroYieldPerSecond('0');
-          }
-          if (activeInvestment !== null) {
-            setActiveInvestment(null);
-          }
           if (prevUser.earnedYield !== '0.000000000000000000' || prevUser.totalBalance !== 0 || prevUser.totalDeposit !== 0 || prevUser.principalBalance !== '0.000000000000000000') {
             const zeroUser: User = {
               ...prevUser,
@@ -200,15 +147,7 @@ export default function App() {
 
         const nowMs = Date.now();
         const nowSec = Math.floor(nowMs / 1000);
-
         const effectiveInvAmt = Math.max(totalDep, pBal);
-
-        let parsedCreatedSec = 0;
-        if (prevUser.createdAt) {
-          const t = new Date(prevUser.createdAt).getTime();
-          if (!isNaN(t) && t > 0) parsedCreatedSec = Math.floor(t / 1000);
-        }
-
         const canonicalDepositStart = resolveCanonicalDepositStartTime(prevUser, currentInv, deposits);
 
         if (!currentInv && effectiveInvAmt > 0) {
@@ -223,14 +162,12 @@ export default function App() {
             lastCalculatedTimestamp: nowMs,
             depositStartTime: canonicalDepositStart
           };
-          setActiveInvestment(currentInv);
         }
 
         if (!currentInv && effectiveInvAmt <= 0) return prevUser;
 
         const invAmt = parseFloat(String(currentInv?.investmentAmount || effectiveInvAmt || '0')) || effectiveInvAmt;
         if (invAmt <= 0) {
-          if (microYieldPerSecond !== '0') setMicroYieldPerSecond('0');
           return prevUser;
         }
 
@@ -241,7 +178,7 @@ export default function App() {
         let baseYieldStr = prevUser.baseEarnedYield || '0.000000000000000000';
         const totalWithdrawnVal = prevUser.totalWithdrawn || '0';
 
-        const monthlyYieldPercent = currentInv.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+        const monthlyYieldPercent = currentInv?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
 
         const yieldRes = calculateServerTimestampYield(
           totalDep,
@@ -252,7 +189,6 @@ export default function App() {
           totalWithdrawnVal
         );
 
-        const yieldPerSec = yieldRes.yieldPerSecond;
         const calculatedYieldBN = yieldRes.accumulatedProfit;
 
         // Monotonic calculation anchored to depositStartTime & baseEarnedYield
@@ -270,14 +206,20 @@ export default function App() {
           0
         );
 
-        setMicroYieldPerSecond(yieldPerSec.toFixed(18));
-
         const updatedInv: ActiveInvestment = {
-          ...currentInv,
+          ...(currentInv || {
+            investmentAmount: effectiveInvAmt,
+            planType: 'STANDARD',
+            planName: 'Standard Plan',
+            dailyYieldPercent: 0.8333333333333334,
+            monthlyYieldPercent: 25,
+            activationTimestamp: nowMs,
+            lastCalculatedTimestamp: nowMs,
+            depositStartTime: depositStartSec
+          }),
           lastCalculatedTimestamp: nowMs,
           depositStartTime: depositStartSec
         };
-        setActiveInvestment(updatedInv);
 
         if (prevUser.id) {
           localStorage.setItem(`dollarcraft_active_investment_${prevUser.id}`, JSON.stringify(updatedInv));
@@ -392,15 +334,6 @@ export default function App() {
             const nowSec = Math.floor(Date.now() / 1000);
             const fsWithdrawn = d.totalWithdrawn !== undefined ? String(d.totalWithdrawn) : (prevUser.totalWithdrawn || '0');
 
-            if (!d.depositStartTime && cleanEmail) {
-              import('./lib/firebase').then(({ db, isClientFirestoreQuotaExceeded }) => {
-                if (isClientFirestoreQuotaExceeded) return;
-                import('firebase/firestore').then(({ doc, setDoc }) => {
-                  setDoc(doc(db, 'users', cleanEmail), { depositStartTime: effectiveDepositStart, baseEarnedYield: fsBaseYield }, { merge: true }).catch(() => {});
-                });
-              });
-            }
-
             const monthlyRate = (d.activeInvestment?.monthlyYieldPercent) || (effectiveDepNum >= 1001 ? 35 : (effectiveDepNum >= 501 ? 30 : 25));
             const yieldRes = calculateServerTimestampYield(
               effectiveDepNum,
@@ -413,13 +346,11 @@ export default function App() {
 
             const finalYieldBN = yieldRes.accumulatedProfit;
             const fsYieldStr = finalYieldBN.toFixed(18);
-
             const computedTotalBal = Math.max(0, effectiveDepNum + finalYieldBN.toNumber());
 
             let updatedInv = prevUser.activeInvestment;
             if (effectiveBalNum <= 0) {
               updatedInv = null;
-              setActiveInvestment(null);
             } else if (d.activeInvestment) {
               updatedInv = {
                 investmentAmount: Math.max(Number(d.activeInvestment.investmentAmount || 0), effectiveBalNum),
@@ -431,7 +362,6 @@ export default function App() {
                 lastCalculatedTimestamp: Number(d.activeInvestment.lastCalculatedTimestamp || Date.now()),
                 depositStartTime: effectiveDepositStart
               };
-              setActiveInvestment(updatedInv);
             } else if (effectiveBalNum > 0) {
               const pBalNum = effectiveBalNum;
               let dailyYieldPercent = 0.8333333333333334;
@@ -459,7 +389,6 @@ export default function App() {
                 lastCalculatedTimestamp: Date.now(),
                 depositStartTime: effectiveDepositStart
               };
-              setActiveInvestment(updatedInv);
             }
 
             const earnedYieldNum = parseFloat(fsYieldStr || '0') || 0;
@@ -484,8 +413,6 @@ export default function App() {
                 depositStartTime: 0,
                 baseEarnedYield: '0.000000000000000000'
               };
-              setActiveInvestment(null);
-              setMicroYieldPerSecond('0');
               localStorage.setItem('dollarcraft_active_user', JSON.stringify(zeroUser));
               return zeroUser;
             }
@@ -557,24 +484,6 @@ export default function App() {
 
   // Real-time calculation variables for UI tick rate
   const [isLiveStreaming, setIsLiveStreaming] = useState<boolean>(true);
-  const [globalLiveProfit, setGlobalLiveProfit] = useState<number>(0);
-
-  // Global Continuous 100ms Ticker for absolute parity across all views & modals
-  useEffect(() => {
-    if (!user) {
-      setGlobalLiveProfit(0);
-      return;
-    }
-
-    const tick = () => {
-      const liveVal = computeLiveUserAccruedProfit(user, deposits, transactions);
-      setGlobalLiveProfit(liveVal);
-    };
-
-    tick();
-    const interval = setInterval(tick, 100);
-    return () => clearInterval(interval);
-  }, [user, deposits, transactions]);
 
   // Theme State (Dark Mode vs High-Contrast Light Mode)
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -633,7 +542,7 @@ export default function App() {
         handleAutoSave();
       } else if (document.visibilityState === 'visible') {
         if (user) {
-          const res = reconcileUserOfflineYield(user, activeInvestment);
+          const res = reconcileUserOfflineYield(user, user.activeInvestment);
           if (res.updatedUser && res.updatedUser.earnedYield !== user.earnedYield) {
             setUser(res.updatedUser);
           }
@@ -651,7 +560,7 @@ export default function App() {
       window.removeEventListener('pagehide', handleAutoSave);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [user]);
+  }, [user?.email, user?.id]);
 
   // Navigation & Modals
   const [activeTab, setActiveTab] = useState<string>('customer_dashboard');
@@ -672,7 +581,7 @@ export default function App() {
         setActiveTab('customer_dashboard');
       }
     }
-  }, [user]);
+  }, [user?.email, user?.role]);
   const [isAuthOpen, setIsAuthOpen] = useState<boolean>(true);
   const [authInitialMode, setAuthInitialMode] = useState<'login' | 'signup'>('login');
 
@@ -980,10 +889,6 @@ export default function App() {
           };
         });
 
-        if (data.microYieldPerSecond) {
-          setMicroYieldPerSecond(data.microYieldPerSecond);
-        }
-
         // Update active cycles earned yield
         if (data.activeCycles && Array.isArray(data.activeCycles)) {
           setDeposits((prevDeposits) =>
@@ -1133,9 +1038,6 @@ export default function App() {
 
     // Reset monotonic yield clamp ref immediately to post-withdrawal yield
     lastRenderedYieldRef.current = newYieldBN;
-    if (updatedInv) {
-      setActiveInvestment(updatedInv);
-    }
 
     // 1. Update React user state immediately (INSTANT UI RE-RENDER)
     setUser(updatedUser);
@@ -1479,20 +1381,10 @@ export default function App() {
             deposits={deposits}
             transactions={transactions}
             onOpenDeposit={() => setIsDepositOpen(true)}
-            onOpenWithdraw={(liveVal?: number) => {
-              if (typeof liveVal === 'number' && liveVal >= 0) {
-                setGlobalLiveProfit(liveVal);
-              }
-              setIsWithdrawalOpen(true);
-            }}
+            onOpenWithdraw={() => setIsWithdrawalOpen(true)}
             onOpenMasterPlan={() => setIsMasterPlanOpen(true)}
             onOpenAuth={handleOpenAuth}
             onRefreshData={fetchState}
-            onSyncLiveProfit={(liveVal: number) => {
-              if (typeof liveVal === 'number' && liveVal >= 0) {
-                setGlobalLiveProfit(liveVal);
-              }
-            }}
           />
         )}
 
@@ -1655,7 +1547,6 @@ export default function App() {
         currentUser={user}
         deposits={deposits}
         transactions={transactions}
-        liveEarnedProfit={globalLiveProfit}
         onSubmitWithdrawal={handleSubmitWithdrawal}
       />
 

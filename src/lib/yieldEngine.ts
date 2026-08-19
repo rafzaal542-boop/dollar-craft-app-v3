@@ -269,6 +269,27 @@ export function resolveCanonicalDepositStartTime(
   deposits?: Array<Partial<UserDeposit>> | null
 ): number {
   const nowSec = Math.floor(Date.now() / 1000);
+
+  // 1. Authoritative Anchor: user.depositStartTime corresponds to baseEarnedYield (e.g. after a withdrawal or deposit)
+  if (user?.depositStartTime) {
+    const sec = typeof user.depositStartTime === 'number'
+      ? (user.depositStartTime > 100000000000 ? Math.floor(user.depositStartTime / 1000) : Math.floor(user.depositStartTime))
+      : Number(user.depositStartTime);
+    if (!isNaN(sec) && sec > 0 && sec <= nowSec) {
+      return sec;
+    }
+  }
+
+  // 2. Active investment anchor
+  if (activeInvestment?.depositStartTime) {
+    const sec = typeof activeInvestment.depositStartTime === 'number'
+      ? (activeInvestment.depositStartTime > 100000000000 ? Math.floor(activeInvestment.depositStartTime / 1000) : Math.floor(activeInvestment.depositStartTime))
+      : Number(activeInvestment.depositStartTime);
+    if (!isNaN(sec) && sec > 0 && sec <= nowSec) {
+      return sec;
+    }
+  }
+
   const candidates: number[] = [];
 
   const addCandidate = (val: any) => {
@@ -292,16 +313,7 @@ export function resolveCanonicalDepositStartTime(
     }
   };
 
-  if (user) {
-    addCandidate(user.depositStartTime);
-    if (user.activeInvestment) {
-      addCandidate(user.activeInvestment.depositStartTime);
-      addCandidate(user.activeInvestment.activationTimestamp);
-    }
-  }
-
-  if (activeInvestment) {
-    addCandidate(activeInvestment.depositStartTime);
+  if (activeInvestment?.activationTimestamp) {
     addCandidate(activeInvestment.activationTimestamp);
   }
 
@@ -312,6 +324,10 @@ export function resolveCanonicalDepositStartTime(
         addCandidate((d as any).depositStartTime);
       }
     });
+  }
+
+  if (user?.createdAt) {
+    addCandidate(user.createdAt);
   }
 
   if (candidates.length > 0) {

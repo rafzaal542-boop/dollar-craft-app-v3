@@ -314,28 +314,42 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   };
 
   const lastRenderedProfitRef = React.useRef<number>(0);
+  const prevEarnedYieldRef = React.useRef<string>(currentUser?.earnedYield || '0');
 
-  // Sync ref with currentUser on load or user changes
+  // Sync ref with currentUser on load, user changes, and withdrawal deductions
   useEffect(() => {
     if (currentUser?.earnedYield) {
       const parsed = parseFloat(currentUser.earnedYield) || 0;
-      lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, parsed);
+      const prevParsed = parseFloat(prevEarnedYieldRef.current) || 0;
+      // If profit decreased (e.g. withdrawal was placed), reset ref immediately to new lower base
+      if (parsed < prevParsed || !lastRenderedProfitRef.current) {
+        lastRenderedProfitRef.current = parsed;
+      } else {
+        lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, parsed);
+      }
+      prevEarnedYieldRef.current = currentUser.earnedYield;
     }
-  }, [currentUser?.email, currentUser?.id]);
+  }, [currentUser?.earnedYield, currentUser?.email, currentUser?.id]);
 
   const getLiveAccruedDailyProfit = (): string => {
     if (!currentUser) return '0.000000';
     const totalDep = parseFloat(getCalculatedTotalDeposit()) || 0;
     if (totalDep <= 0) {
       lastRenderedProfitRef.current = 0;
+      prevEarnedYieldRef.current = '0';
       return '0.000000';
     }
 
-    // High-precision realtime yield with strict monotonic clamp
+    // High-precision realtime yield with smooth forward progression
     const earnedYieldNum = parseFloat(currentUser.earnedYield || '0') || 0;
-    const clampedYield = Math.max(lastRenderedProfitRef.current, earnedYieldNum);
-    lastRenderedProfitRef.current = clampedYield;
-    return clampedYield.toFixed(6);
+    const prevParsed = parseFloat(prevEarnedYieldRef.current) || 0;
+    if (earnedYieldNum < prevParsed) {
+      lastRenderedProfitRef.current = earnedYieldNum;
+      prevEarnedYieldRef.current = currentUser.earnedYield || '0';
+    } else {
+      lastRenderedProfitRef.current = Math.max(lastRenderedProfitRef.current, earnedYieldNum);
+    }
+    return lastRenderedProfitRef.current.toFixed(6);
   };
 
   const calculateTotalBalance = () => {

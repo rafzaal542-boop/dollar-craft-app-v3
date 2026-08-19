@@ -123,7 +123,7 @@ export default function App() {
   useEffect(() => {
     if (user?.earnedYield) {
       const userYieldBN = new BigNumber(user.earnedYield || '0');
-      lastRenderedYieldRef.current = BigNumber.max(lastRenderedYieldRef.current, userYieldBN);
+      lastRenderedYieldRef.current = userYieldBN;
     }
   }, [user?.id, user?.email]);
 
@@ -255,12 +255,13 @@ export default function App() {
         const yieldPerSec = yieldRes.yieldPerSecond;
         const calculatedYieldBN = yieldRes.accumulatedProfit;
 
-        // Strict Monotonic Clamp: Ensure yield strictly increments forward, never decreases or jumps backward
-        const currentYieldBN = BigNumber.max(
-          lastRenderedYieldRef.current,
-          new BigNumber(prevUser.earnedYield || '0'),
-          calculatedYieldBN
-        );
+        // Monotonic calculation anchored to depositStartTime & baseEarnedYield
+        let currentYieldBN = calculatedYieldBN;
+        if (calculatedYieldBN.isLessThan(lastRenderedYieldRef.current) && calculatedYieldBN.isGreaterThanOrEqualTo(new BigNumber(baseYieldStr))) {
+          currentYieldBN = calculatedYieldBN;
+        } else {
+          currentYieldBN = BigNumber.max(lastRenderedYieldRef.current, calculatedYieldBN);
+        }
         lastRenderedYieldRef.current = currentYieldBN;
 
         const newEarnedStr = currentYieldBN.toFixed(18);
@@ -1067,6 +1068,11 @@ export default function App() {
     const totalDepNum = parseFloat(String(user.totalDeposit || user.principalBalance || '0')) || 0;
     const newTotBal = Math.max(0, totalDepNum + newYieldBN.toNumber());
     const nowSec = Math.floor(Date.now() / 1000);
+    const updatedInv = user.activeInvestment ? {
+      ...user.activeInvestment,
+      depositStartTime: nowSec,
+      lastCalculatedTimestamp: Date.now()
+    } : null;
 
     const updatedUser: User = {
       ...user,
@@ -1075,8 +1081,15 @@ export default function App() {
       totalWithdrawn: newWithdrawnStr,
       totalBalance: newTotBal,
       baseEarnedYield: newYieldStr,
-      depositStartTime: nowSec
+      depositStartTime: nowSec,
+      activeInvestment: updatedInv
     };
+
+    // Reset monotonic yield clamp ref immediately to post-withdrawal yield
+    lastRenderedYieldRef.current = newYieldBN;
+    if (updatedInv) {
+      setActiveInvestment(updatedInv);
+    }
 
     // 1. Update React user state immediately (INSTANT UI RE-RENDER)
     setUser(updatedUser);

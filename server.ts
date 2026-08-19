@@ -2276,6 +2276,7 @@ app.get('/api/dashboard/state', async (req: Request, res: Response) => {
             ? query(collection(db, 'withdrawals'), where('userEmail', '==', userEmailSearch))
             : query(collection(db, 'withdrawals'), where('userId', '==', userIdSearch));
           const allWdSnap = await getDocs(wdQ).catch(() => null);
+          let totalWdSumBN = new BigNumber(0);
           if (allWdSnap) {
             allWdSnap.forEach((wDoc) => {
               const wData: any = wDoc.data();
@@ -2285,7 +2286,7 @@ app.get('/api/dashboard/state', async (req: Request, res: Response) => {
               if ((userEmailSearch && wEmail === userEmailSearch) || (userIdSearch && wUserId === userIdSearch)) {
                 const wAmt = parseFloat(wData.amount || wData.precisionAmount || '0') || 0;
                 if (wData.status === 'APPROVED' || wData.status === 'PENDING') {
-                  maxWithdrawnBN = BigNumber.max(maxWithdrawnBN, new BigNumber(wAmt));
+                  totalWdSumBN = totalWdSumBN.plus(wAmt);
                 }
                 const existingIdx = mockTransactions.findIndex((m) => m.id === wdId);
                 const txObj: Transaction = {
@@ -2307,6 +2308,7 @@ app.get('/api/dashboard/state', async (req: Request, res: Response) => {
                 }
               }
             });
+            maxWithdrawnBN = BigNumber.max(maxWithdrawnBN, totalWdSumBN);
           }
         }
       } catch (fsErr) {

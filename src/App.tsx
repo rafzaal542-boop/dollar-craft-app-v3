@@ -1622,6 +1622,7 @@ export default function App() {
         earnedYield={user?.earnedYield || '0'}
         currentUser={user}
         deposits={deposits}
+        transactions={transactions}
         onSubmitWithdrawal={handleSubmitWithdrawal}
       />
 

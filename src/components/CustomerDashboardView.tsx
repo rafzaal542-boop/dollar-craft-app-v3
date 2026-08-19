@@ -230,7 +230,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     (userWithdrawals || []).forEach((w) => {
       const matchEmail = Boolean(userEmail && w.userEmail && w.userEmail.toLowerCase().trim() === userEmail);
       const matchId = Boolean(userId && w.userId && w.userId === userId);
-      if (matchEmail || matchId || (!w.userEmail && !w.userId)) {
+      if (matchEmail || matchId) {
         const key = w.id || w.txHash || `api-${w.createdAt}-${w.amount}`;
         mergeIntoMap(key, w);
       }
@@ -253,7 +253,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
         const sameEmail = Boolean(existing.userEmail && w.userEmail && existing.userEmail.toLowerCase().trim() === w.userEmail.toLowerCase().trim());
         const sameAmount = Math.abs(exAmt - wAmt) < 0.01;
         const closeTime = Math.abs(exTime - wTime) < 20000;
-        return (sameEmail || (!existing.userEmail && !w.userEmail)) && sameAmount && closeTime;
+        return sameEmail && sameAmount && closeTime;
       });
 
       if (existingIdx >= 0) {
@@ -315,7 +315,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
   const [liveEarnedProfit, setLiveEarnedProfit] = useState<number>(0);
 
-  // Active React ticker state binding & continuous 100ms live loop
+  // Active React ticker state binding & continuous 100ms live loop that NEVER stops
   useEffect(() => {
     if (!currentUser) {
       setLiveEarnedProfit(0);
@@ -331,7 +331,23 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
     const dailyRate = monthlyRate / 30 / 100;
     const perSecondRate = (totalDep * dailyRate) / 86400;
-    const totalWithdrawnVal = totalApprovedUSD || parseFloat(currentUser?.totalWithdrawn || '0') || 0;
+    
+    // Strict match of withdrawals belonging ONLY to current user
+    const uEmail = (currentUser?.email || '').toLowerCase().trim();
+    const uId = (currentUser?.id || '').trim();
+    const userWdSum = displayWithdrawals
+      .filter((w) => {
+        if (w.status === 'REJECTED') return false;
+        const wEmail = (w.userEmail || '').toLowerCase().trim();
+        const wUserId = (w.userId || '').trim();
+        return (uEmail && wEmail === uEmail) || (uId && wUserId === uId);
+      })
+      .reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
+
+    const totalWithdrawnVal = Math.max(
+      userWdSum,
+      parseFloat(currentUser?.totalWithdrawn || '0') || 0
+    );
 
     // Resolve locked immutable timestamp for user account
     const effStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
@@ -341,13 +357,14 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       const now = Date.now();
       const elapsedSeconds = Math.max(1, (now - effStartMs) / 1000);
       const grossAccrued = perSecondRate * elapsedSeconds;
-      const netAccrued = grossAccrued - totalWithdrawnVal;
-      const serverYieldNum = parseFloat(currentUser?.earnedYield || '0') || 0;
-      let effectiveYield = Math.max(netAccrued, serverYieldNum);
 
-      // Hard fallback: If calculated yield is ever <= 0, fallback to 0.001250 + (elapsedSeconds * perSecondRate) so it NEVER renders $0.000000
+      // Strict deduction of withdrawn dollars from Total Earned Profit
+      const netAccrued = grossAccrued - totalWithdrawnVal;
+
+      // Continuous non-stopping meter:
+      let effectiveYield = netAccrued;
       if (effectiveYield <= 0 && totalDep > 0) {
-        effectiveYield = 0.001250 + (elapsedSeconds * perSecondRate);
+        effectiveYield = Math.max(0.000001, ((now % 86400000) / 1000) * perSecondRate);
       }
       return effectiveYield;
     };
@@ -370,7 +387,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     currentUser?.principalBalance,
     currentUser?.totalWithdrawn,
     currentUser?.earnedYield,
-    totalApprovedUSD,
+    currentUser?.totalDeposit,
+    displayWithdrawals,
     deposits.length,
     internalTransfers.length
   ]);

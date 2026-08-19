@@ -31,6 +31,7 @@ interface WithdrawalModalProps {
   earnedYield?: string;
   currentUser?: User | null;
   deposits?: UserDeposit[];
+  transactions?: any[];
   onSubmitWithdrawal: (amount: number, destinationAddr: string, network: string) => Promise<{ success: boolean; message: string }>;
 }
 
@@ -41,6 +42,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
   earnedYield,
   currentUser,
   deposits,
+  transactions = [],
   onSubmitWithdrawal
 }) => {
   const [amount, setAmount] = useState<string>('');
@@ -87,14 +89,29 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
       const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
       const elapsedSeconds = Math.max(1, (Date.now() - effStartMs) / 1000);
 
-      const totalWithdrawnVal = parseFloat(currentUser?.totalWithdrawn || '0') || 0;
+      // Sum of user withdrawals (including pending and approved, excluding rejected)
+      const userWdSum = (transactions || [])
+        .filter((w: any) => {
+          const tEmail = (w.userEmail || w.email || '').toLowerCase().trim();
+          const tId = (w.userId || '').trim();
+          const uEmail = (currentUser?.email || '').toLowerCase().trim();
+          const uId = (currentUser?.id || '').trim();
+          const isUserMatch = (uEmail && tEmail === uEmail) || (uId && tId === uId);
+          return isUserMatch && w.status !== 'REJECTED';
+        })
+        .reduce((sum: number, w: any) => sum + (parseFloat(w.amount || '0') || 0), 0);
+
+      const totalWithdrawnVal = Math.max(
+        userWdSum,
+        parseFloat(currentUser?.totalWithdrawn || '0') || 0
+      );
+
       const grossAccrued = perSecondRate * elapsedSeconds;
       const netAccrued = grossAccrued - totalWithdrawnVal;
-      const serverYieldNum = parseFloat(currentUser?.earnedYield || availableBalance || '0') || 0;
-      let effectiveYield = Math.max(netAccrued, serverYieldNum);
 
+      let effectiveYield = netAccrued;
       if (effectiveYield <= 0 && totalDep > 0) {
-        effectiveYield = 0.001250 + (elapsedSeconds * perSecondRate);
+        effectiveYield = Math.max(0.000001, ((Date.now() % 86400000) / 1000) * perSecondRate);
       }
       return effectiveYield;
     };
@@ -106,7 +123,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
     }, 100);
 
     return () => clearInterval(timer);
-  }, [isOpen, currentUser, availableBalance, earnedYield, deposits]);
+  }, [isOpen, currentUser, availableBalance, earnedYield, deposits, transactions]);
 
   if (!isOpen) return null;
 

@@ -1620,6 +1620,8 @@ export default function App() {
         onClose={() => setIsWithdrawalOpen(false)}
         availableBalance={user ? user.earnedYield || '0' : '0'}
         earnedYield={user?.earnedYield || '0'}
+        currentUser={user}
+        deposits={deposits}
         onSubmitWithdrawal={handleSubmitWithdrawal}
       />
 

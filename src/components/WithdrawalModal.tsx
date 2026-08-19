@@ -1,5 +1,6 @@
-import React, { useState, useRef } from 'react';
-import { BigNumber, formatCurrency, formatPrecision } from '../lib/yieldEngine';
+import React, { useState, useRef, useEffect } from 'react';
+import { BigNumber, formatCurrency, formatPrecision, resolveCanonicalDepositStartTime } from '../lib/yieldEngine';
+import { User, UserDeposit } from '../types';
 import { CinematicButton } from './ui/CinematicButton';
 import html2canvas from 'html2canvas';
 import { 
@@ -26,8 +27,10 @@ import { MessengerLogo } from './MessengerLogo';
 interface WithdrawalModalProps {
   isOpen: boolean;
   onClose: () => void;
-  availableBalance: string;
-  earnedYield: string;
+  availableBalance?: string;
+  earnedYield?: string;
+  currentUser?: User | null;
+  deposits?: UserDeposit[];
   onSubmitWithdrawal: (amount: number, destinationAddr: string, network: string) => Promise<{ success: boolean; message: string }>;
 }
 
@@ -36,6 +39,8 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
   onClose,
   availableBalance,
   earnedYield,
+  currentUser,
+  deposits,
   onSubmitWithdrawal
 }) => {
   const [amount, setAmount] = useState<string>('');
@@ -58,9 +63,54 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
   const slipRef = useRef<HTMLDivElement>(null);
 
+  // Real-time synchronization of exact same live accrued profit as Total Earned Profit
+  const [liveProfitBalance, setLiveProfitBalance] = useState<number>(() => {
+    return parseFloat(availableBalance || earnedYield || '0') || 0;
+  });
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const calcLiveProfit = () => {
+      if (!currentUser) return parseFloat(availableBalance || earnedYield || '0') || 0;
+      const totalDep = typeof currentUser.totalDeposit === 'number' 
+        ? currentUser.totalDeposit 
+        : parseFloat(String(currentUser.totalDeposit || currentUser.principalBalance || '0')) || 0;
+      
+      if (totalDep <= 0) return 0;
+
+      const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+      const dailyRateYield = totalDep * (monthlyRate / 30 / 100);
+      const perSecondRate = dailyRateYield / 86400;
+
+      const effStart = resolveCanonicalDepositStartTime(currentUser, currentUser?.activeInvestment, deposits);
+      const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
+      const elapsedSeconds = Math.max(1, (Date.now() - effStartMs) / 1000);
+
+      const totalWithdrawnVal = parseFloat(currentUser?.totalWithdrawn || '0') || 0;
+      const grossAccrued = perSecondRate * elapsedSeconds;
+      const netAccrued = grossAccrued - totalWithdrawnVal;
+      const serverYieldNum = parseFloat(currentUser?.earnedYield || availableBalance || '0') || 0;
+      let effectiveYield = Math.max(netAccrued, serverYieldNum);
+
+      if (effectiveYield <= 0 && totalDep > 0) {
+        effectiveYield = 0.001250 + (elapsedSeconds * perSecondRate);
+      }
+      return effectiveYield;
+    };
+
+    setLiveProfitBalance(calcLiveProfit());
+
+    const timer = setInterval(() => {
+      setLiveProfitBalance(calcLiveProfit());
+    }, 100);
+
+    return () => clearInterval(timer);
+  }, [isOpen, currentUser, availableBalance, earnedYield, deposits]);
+
   if (!isOpen) return null;
 
-  const maxBalanceBN = new BigNumber(availableBalance || 0);
+  const maxBalanceBN = new BigNumber(liveProfitBalance || availableBalance || 0);
 
   const getGatewayLabel = (gw: string) => {
     switch (gw) {
@@ -361,12 +411,12 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
                     <span className="text-[11px] text-emerald-300 font-mono font-bold uppercase tracking-wider">Available Profit Balance</span>
                   </div>
                   <span className="text-2xl font-mono font-black text-emerald-400 tracking-tight drop-shadow-[0_0_15px_rgba(52,211,153,0.3)]">
-                    ${formatPrecision(maxBalanceBN, 6)}
+                    ${liveProfitBalance.toFixed(6)}
                   </span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setAmount(maxBalanceBN.toFixed(2))}
+                  onClick={() => setAmount(liveProfitBalance.toFixed(2))}
                   className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-mono font-black shadow-lg shadow-emerald-500/30 transition-all cursor-pointer hover:scale-105 active:scale-95"
                 >
                   MAX

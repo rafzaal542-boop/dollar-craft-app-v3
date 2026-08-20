@@ -38,6 +38,8 @@ export interface User {
   earnedYield: string;      // High precision Decimal string (18 decimals)
   accumulatedProfit?: string; // High precision Decimal string (18 decimals)
   totalWithdrawn: string;   // High precision Decimal string
+  withdrawnTotal?: string;
+  dailyYieldRate?: number | string;
   totalDeposit?: number | string;
   dailyProfit?: number | string;
   totalBalance?: number | string;

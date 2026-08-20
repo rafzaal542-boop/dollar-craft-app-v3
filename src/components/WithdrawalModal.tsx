@@ -122,9 +122,9 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
   if (!isOpen) return null;
 
-  const currentAvailableProfit = typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0
-    ? liveAccruedProfit
-    : liveProfitBalance;
+  const currentAvailableProfit = liveProfitBalance > 0
+    ? liveProfitBalance
+    : (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0 ? liveAccruedProfit : 0);
 
   const maxBalanceBN = new BigNumber(currentAvailableProfit || availableBalance || 0);
 

@@ -181,13 +181,7 @@ export default function App() {
         const liveProfitValue = computeLiveUserAccruedProfit(prevUser, deposits, transactions);
         const calculatedYieldBN = new BigNumber(liveProfitValue);
 
-        // Monotonic calculation anchored to depositStartTime & baseEarnedYield
         let currentYieldBN = calculatedYieldBN;
-        if (calculatedYieldBN.isLessThan(lastRenderedYieldRef.current) && calculatedYieldBN.isGreaterThanOrEqualTo(new BigNumber(baseYieldStr))) {
-          currentYieldBN = calculatedYieldBN;
-        } else {
-          currentYieldBN = BigNumber.max(lastRenderedYieldRef.current, calculatedYieldBN);
-        }
         lastRenderedYieldRef.current = currentYieldBN;
 
         const newEarnedStr = currentYieldBN.toFixed(18);
@@ -1013,23 +1007,22 @@ export default function App() {
       return { success: false, message: 'Minimum withdrawal amount is $50.' };
     }
 
-    const userYieldBN = new BigNumber(user.earnedYield || '0');
-    const userDailyProfitBN = new BigNumber(user.dailyProfit || 0);
-    const userTotalBalBN = new BigNumber(user.totalBalance || 0);
-    const maxAvailable = BigNumber.max(userYieldBN, userDailyProfitBN, userTotalBalBN);
+    const currentLiveProfit = computeLiveUserAccruedProfit(user, deposits, transactions);
+    const availableProfit = currentLiveProfit > 0 ? currentLiveProfit : (parseFloat(user.earnedYield || '0') || 0);
 
-    if (new BigNumber(amount).isGreaterThan(maxAvailable) && maxAvailable.isGreaterThan(0)) {
+    if (amount > availableProfit && availableProfit > 0) {
       return { success: false, message: 'Insufficient balance.' };
     }
 
-    // Deduct requested amount directly from user's dailyProfit (earnedYield) and totalBalance
-    const newYieldBN = BigNumber.max(0, userYieldBN.minus(amount));
-    const newYieldStr = newYieldBN.toFixed(18);
-    const newDailyProfit = newYieldBN.toNumber();
-    const newWithdrawnNum = (parseFloat(String(user.withdrawnTotal || user.totalWithdrawn || '0')) || 0) + amount;
+    // Deduct requested amount directly from user's daily profit (earned yield)
+    const newNetProfit = Math.max(0, availableProfit - amount);
+    const newYieldStr = newNetProfit.toFixed(18);
+    const newDailyProfit = newNetProfit;
+    const prevWithdrawn = parseFloat(String(user.withdrawnTotal || user.totalWithdrawn || '0')) || 0;
+    const newWithdrawnNum = prevWithdrawn + amount;
     const newWithdrawnStr = newWithdrawnNum.toFixed(18);
     const totalDepNum = parseFloat(String(user.totalDeposit || user.principalBalance || '0')) || 0;
-    const newTotBal = Math.max(0, totalDepNum + newYieldBN.toNumber());
+    const newTotBal = Math.max(0, totalDepNum + newNetProfit);
     const nowSec = Math.floor(Date.now() / 1000);
     const updatedInv = user.activeInvestment ? {
       ...user.activeInvestment,
@@ -1048,7 +1041,8 @@ export default function App() {
     };
 
     // Reset monotonic yield clamp ref immediately to post-withdrawal yield
-    lastRenderedYieldRef.current = newYieldBN;
+    lastRenderedYieldRef.current = new BigNumber(newNetProfit);
+    setLiveAccruedProfit(newNetProfit);
 
     // 1. Update React user state immediately (INSTANT UI RE-RENDER)
     setUser(updatedUser);

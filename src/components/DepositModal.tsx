@@ -415,7 +415,20 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                     min={activePlan.minDeposit}
                     max={activePlan.maxDeposit}
                     value={amount}
-                    onChange={(e) => setAmount(Number(e.target.value))}
+                    onChange={(e) => {
+                      const newAmt = Number(e.target.value);
+                      setAmount(newAmt);
+                      if (newAmt >= 1001) {
+                        const vipPlan = availablePlans.find(p => p.id === 'plan-vip' || p.name.toLowerCase().includes('vip'));
+                        if (vipPlan) setSelectedPlanId(vipPlan.id);
+                      } else if (newAmt >= 501) {
+                        const premPlan = availablePlans.find(p => p.id === 'plan-premium' || p.name.toLowerCase().includes('premium'));
+                        if (premPlan) setSelectedPlanId(premPlan.id);
+                      } else if (newAmt >= 100) {
+                        const stdPlan = availablePlans.find(p => p.id === 'plan-standard' || p.name.toLowerCase().includes('standard'));
+                        if (stdPlan) setSelectedPlanId(stdPlan.id);
+                      }
+                    }}
                     className="w-full bg-[#070D18] border border-slate-700/80 rounded-2xl py-3.5 pl-9 pr-20 font-mono text-white text-lg font-bold focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20 outline-none transition-all"
                   />
                   <button

@@ -315,8 +315,53 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     return Math.max(userPrincipal, userTotalDep, depositSum, transferSum).toFixed(4);
   };
 
+  const allCombinedDeposits = useMemo(() => {
+    const list = [...deposits];
+    internalTransfers.forEach((itx) => {
+      if (
+        itx.toWalletType === 'MAIN_WALLET' ||
+        itx.toWalletType === 'INVESTMENT_WALLET' ||
+        !itx.toWalletType
+      ) {
+        const exists = list.some(
+          (d) => d && ((d.txHash && itx.transferId && d.txHash === itx.transferId) || (d.id && itx.transferId && d.id.includes(itx.transferId)))
+        );
+        if (!exists) {
+          const transferAmt = parseFloat(String(itx.amount || '0')) || 0;
+          const rates = getPlanRates(transferAmt);
+          list.unshift({
+            id: `dep-${itx.transferId}`,
+            userId: currentUser?.id || '',
+            userEmail: currentUser?.email || '',
+            planId: 'plan-standard',
+            planName: rates.planName,
+            principalAmount: String(itx.amount || '0'),
+            earnedYield: '0.000000000000000000',
+            totalPayout: '0',
+            dailyYieldPercent: rates.dailyYieldPercent,
+            cryptoNetwork: 'Internal Transfer (Main Wallet)',
+            txHash: itx.transferId,
+            status: 'ACTIVE',
+            startTime: itx.createdAt || new Date().toISOString(),
+            endTime: new Date(Date.now() + 240 * 86400 * 1000).toISOString(),
+            lastYieldTick: new Date().toISOString(),
+            progressPercent: 0
+          });
+        }
+      }
+    });
+    return list;
+  }, [deposits, internalTransfers, currentUser?.id, currentUser?.email]);
+
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const depositsRef = useRef(allCombinedDeposits);
+  depositsRef.current = allCombinedDeposits;
+  const displayWithdrawalsRef = useRef(displayWithdrawals);
+  displayWithdrawalsRef.current = displayWithdrawals;
+
   const [liveEarnedProfit, setLiveEarnedProfit] = useState<number>(() => {
-    return computeLiveUserAccruedProfit(currentUser, deposits, displayWithdrawals);
+    return computeLiveUserAccruedProfit(currentUser, allCombinedDeposits, displayWithdrawals);
   });
   const profitRef = useRef<number>(0);
 
@@ -328,42 +373,39 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     }
 
     const calcCurrentProfit = () => {
-      return computeLiveUserAccruedProfit(currentUser, deposits, displayWithdrawals);
+      return computeLiveUserAccruedProfit(
+        currentUserRef.current,
+        depositsRef.current,
+        displayWithdrawalsRef.current
+      );
     };
 
     const updateCounter = () => {
       const live = calcCurrentProfit();
       profitRef.current = live;
       setLiveEarnedProfit(live);
-
-      const totalDep = parseFloat(getCalculatedTotalDeposit()) || parseFloat(String(currentUser.totalDeposit || currentUser.principalBalance || 0)) || 0;
-      const profitEl = document.getElementById('live-total-earned-profit');
-      const balanceEl = document.getElementById('live-total-balance');
-      if (profitEl) {
-        profitEl.textContent = '$' + live.toFixed(6);
-      }
-      if (balanceEl) {
-        balanceEl.textContent = '$' + (totalDep + live).toFixed(4);
-      }
     };
 
     updateCounter();
-    const intervalId = setInterval(updateCounter, 50);
+    const intervalId = setInterval(updateCounter, 1000);
 
-    return () => clearInterval(intervalId);
+    const handleSync = () => {
+      updateCounter();
+    };
+
+    window.addEventListener('dollar_craft_transactions_updated', handleSync);
+    window.addEventListener('dollar_craft_users_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('dollar_craft_transactions_updated', handleSync);
+      window.removeEventListener('dollar_craft_users_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
   }, [
     currentUser?.email,
-    currentUser?.id,
-    currentUser?.totalDeposit,
-    currentUser?.principalBalance,
-    currentUser?.totalWithdrawn,
-    currentUser?.withdrawnTotal,
-    currentUser?.dailyYieldRate,
-    currentUser?.activeInvestment?.monthlyYieldPercent,
-    currentUser?.depositStartTime,
-    currentUser?.baseEarnedYield,
-    displayWithdrawals.length,
-    deposits.length
+    currentUser?.id
   ]);
 
   const getCalculatedDailyProfit = (): string => {
@@ -377,41 +419,6 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
       : (totalDep * ((monthlyRate / 30) / 100));
     return dailyProfit24h.toFixed(4);
   };
-
-  const allCombinedDeposits = [...deposits];
-  internalTransfers.forEach((itx) => {
-    if (
-      itx.toWalletType === 'MAIN_WALLET' ||
-      itx.toWalletType === 'INVESTMENT_WALLET' ||
-      !itx.toWalletType
-    ) {
-      const exists = allCombinedDeposits.some(
-        (d) => d && ((d.txHash && itx.transferId && d.txHash === itx.transferId) || (d.id && itx.transferId && d.id.includes(itx.transferId)))
-      );
-      if (!exists) {
-        const transferAmt = parseFloat(String(itx.amount || '0')) || 0;
-        const rates = getPlanRates(transferAmt);
-        allCombinedDeposits.unshift({
-          id: `dep-${itx.transferId}`,
-          userId: currentUser?.id || '',
-          userEmail: currentUser?.email || '',
-          planId: 'plan-standard',
-          planName: rates.planName,
-          principalAmount: String(itx.amount || '0'),
-          earnedYield: '0.000000000000000000',
-          totalPayout: '0',
-          dailyYieldPercent: rates.dailyYieldPercent,
-          cryptoNetwork: 'Internal Transfer (Main Wallet)',
-          txHash: itx.transferId,
-          status: 'ACTIVE',
-          startTime: itx.createdAt || new Date().toISOString(),
-          endTime: new Date(Date.now() + 240 * 86400 * 1000).toISOString(),
-          lastYieldTick: new Date().toISOString(),
-          progressPercent: 0
-        });
-      }
-    }
-  });
 
   return (
     <div className="w-full bg-[#040812] text-slate-100 p-3 sm:p-6 lg:p-8 font-sans min-h-screen space-y-6 sm:space-y-8">
@@ -499,7 +506,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
         /* LOGGED IN FULL CUSTOMER DASHBOARD PAGE */
         <div className="space-y-8">
           
-          {/* TOP CARDS: FINANCIAL OVERVIEW (3 Full-Width Rows / Lines for Maximum Digit Visibility) */}
+          {/* TOP CARDS: FINANCIAL OVERVIEW (3 Full-Width Rows / Lines for Maximum Digit Visibility + Plan Breakdown) */}
           <div className="grid grid-cols-1 gap-4">
             
             {/* Row 1: Total Net Portfolio */}
@@ -526,14 +533,14 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               <div className="text-3xl sm:text-4xl font-black text-emerald-400 font-mono tracking-tight break-all">
                 ${getCalculatedTotalDeposit()}
               </div>
-              {internalTransfers.length > 0 && (
+              {parseFloat(getCalculatedTotalDeposit()) > 0 && (
                 <div className="text-xs font-mono text-slate-400 flex items-center justify-between pt-2 border-t border-slate-800/80">
-                  <span className="flex items-center gap-1 text-purple-300">
-                    <Send className="w-3.5 h-3.5" />
-                    you earn this deposit for 240 days:
+                  <span className="flex items-center gap-1 text-cyan-300">
+                    <Calendar className="w-3.5 h-3.5" />
+                    Contract Duration (240 Days):
                   </span>
                   <span className="text-emerald-300 font-bold">
-                    +${internalTransfers.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0).toFixed(2)}
+                    +${(parseFloat(getCalculatedDailyProfit()) * 240).toFixed(2)} Total 240d Profit
                   </span>
                 </div>
               )}
@@ -542,30 +549,128 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
             {/* Row 3: Live Real-Time Accrued Yield & Daily Rate */}
             <div 
               id="customer-total-earned-profit-card"
-              className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-[#0B152C] via-[#081226] to-[#060D1E] border border-amber-500/40 space-y-2.5 shadow-xl hover:border-amber-400/70 transition-all"
+              className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-[#0D1934] via-[#091328] to-[#050C1B] border border-amber-500/50 space-y-3 shadow-xl hover:border-amber-400/80 transition-all relative overflow-hidden"
             >
               <div className="flex items-center justify-between text-slate-400 font-mono text-xs">
                 <span className="uppercase font-bold flex items-center gap-2 text-amber-300 tracking-wider">
                   <TrendingUp className="w-4.5 h-4.5 text-amber-400" />
                   TOTAL EARNED PROFIT
                 </span>
-                <span className="flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                <span className="flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 font-mono">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  TICKING LIVE
+                  1-SEC SEQUENCE LIVE
                 </span>
               </div>
-              <div id="live-total-earned-profit" className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all">
+              <div id="live-total-earned-profit" className="text-3xl sm:text-4xl lg:text-5xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all drop-shadow-[0_0_12px_rgba(245,158,11,0.25)]">
                 ${liveEarnedProfit.toFixed(6)}
               </div>
-              <div className="text-xs font-mono text-slate-400 flex items-center justify-between pt-2 border-t border-slate-800/80">
-                <span className="flex items-center gap-1 text-slate-400">
-                  Daily Yield Rate (24h Profit):
-                </span>
-                <span className="text-emerald-400 font-bold font-mono tracking-tight bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/30">
-                  +${getCalculatedDailyProfit()}/day
-                </span>
+              <div className="text-xs font-mono text-slate-400 flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2.5 border-t border-slate-800/80">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">24-Hour Target:</span>
+                  <span className="text-emerald-400 font-bold font-mono tracking-tight bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/30">
+                    +${getCalculatedDailyProfit()} USD / 24h
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] text-amber-300/90 font-mono">
+                  <span>Speed:</span>
+                  <span className="text-amber-300 font-bold">
+                    +${(parseFloat(getCalculatedDailyProfit()) / 86400).toFixed(6)}/sec
+                  </span>
+                </div>
               </div>
             </div>
+
+            {/* Row 4: Automated Plan Tier & Daily Dollar Calculator Card */}
+            {(() => {
+              const totalDepNum = parseFloat(getCalculatedTotalDeposit()) || 0;
+              const plan = getPlanRates(totalDepNum);
+              const isVip = plan.planType === 'VIP';
+              const isPremium = plan.planType === 'PREMIUM';
+              const planCode = isVip ? 'DC3' : isPremium ? 'DC2' : 'DC1';
+              const tierName = isVip ? 'DIAMOND' : isPremium ? 'GOLD' : 'BRONZE';
+              const dailyDollar = totalDepNum > 0 ? (totalDepNum * (plan.dailyYieldPercent / 100)) : 0;
+              const monthlyDollar = totalDepNum > 0 ? (totalDepNum * (plan.monthlyYieldPercent / 100)) : 0;
+              const totalContractProfit = dailyDollar * 240;
+
+              return (
+                <div className={`p-5 sm:p-6 rounded-2xl border space-y-4 shadow-xl transition-all ${
+                  isVip 
+                    ? 'bg-gradient-to-br from-[#1C0626] via-[#100318] to-[#08020D] border-fuchsia-500/50 hover:border-fuchsia-400'
+                    : isPremium
+                    ? 'bg-gradient-to-br from-[#201303] via-[#120B02] to-[#0A0601] border-amber-500/50 hover:border-amber-400'
+                    : 'bg-gradient-to-br from-[#061816] via-[#030E0D] to-[#020706] border-cyan-500/50 hover:border-cyan-400'
+                }`}>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs font-mono font-black px-2.5 py-1 rounded-lg uppercase tracking-wider shadow-md ${
+                        isVip 
+                          ? 'bg-gradient-to-r from-fuchsia-500 to-purple-600 text-white border border-fuchsia-400'
+                          : isPremium
+                          ? 'bg-gradient-to-r from-amber-400 to-orange-400 text-slate-950 border border-amber-300'
+                          : 'bg-gradient-to-r from-cyan-400 to-teal-400 text-slate-950 border border-cyan-300'
+                      }`}>
+                        {planCode}
+                      </span>
+                      <div>
+                        <div className="text-sm font-black text-white uppercase tracking-wide flex items-center gap-2 flex-wrap">
+                          <span>{plan.planName}</span>
+                          <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase ${
+                            isVip 
+                              ? 'text-fuchsia-300 bg-fuchsia-500/15 border-fuchsia-500/40'
+                              : isPremium
+                              ? 'text-amber-300 bg-amber-500/15 border-amber-500/40'
+                              : 'text-cyan-300 bg-cyan-500/15 border-cyan-500/40'
+                          }`}>
+                            {tierName} TIER (AUTOMATIC)
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                          8 Months (240 Days Duration) • Continuous 1-second Micro-yield streaming
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="text-left sm:text-right font-mono">
+                      <span className="text-[10px] text-slate-400 uppercase block">Automated Daily Earnings</span>
+                      <span className={`text-lg font-black ${
+                        isVip ? 'text-fuchsia-300' : isPremium ? 'text-amber-300' : 'text-cyan-300'
+                      }`}>
+                        +${dailyDollar.toFixed(4)} USD / Day
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+                    <div className="bg-[#050A14]/80 p-3 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-400 text-[10px] uppercase block">Monthly Yield</span>
+                      <span className={`text-sm font-black ${
+                        isVip ? 'text-fuchsia-300' : isPremium ? 'text-amber-300' : 'text-cyan-300'
+                      }`}>
+                        {plan.monthlyYieldPercent}% / mo
+                      </span>
+                    </div>
+                    <div className="bg-[#050A14]/80 p-3 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-400 text-[10px] uppercase block">Monthly Dollars</span>
+                      <span className="text-sm font-black text-emerald-400">
+                        +${monthlyDollar.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="bg-[#050A14]/80 p-3 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-400 text-[10px] uppercase block">Contract Duration</span>
+                      <span className="text-sm font-black text-white">
+                        240 Days
+                      </span>
+                    </div>
+                    <div className="bg-[#050A14]/80 p-3 rounded-xl border border-slate-800/80">
+                      <span className="text-slate-400 text-[10px] uppercase block">Total Contract Profit</span>
+                      <span className="text-sm font-black text-emerald-300">
+                        +${totalContractProfit.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
           </div>
 

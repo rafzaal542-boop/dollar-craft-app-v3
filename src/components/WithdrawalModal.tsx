@@ -88,25 +88,13 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
   // Real-time synchronization of exact same live accrued profit as Total Earned Profit
   const [liveProfitBalance, setLiveProfitBalance] = useState<number>(() => {
-    if (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0) {
-      return liveAccruedProfit;
-    }
     return computeLiveUserAccruedProfit(currentUser, deposits, transactions);
   });
 
   useEffect(() => {
-    if (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0) {
-      setLiveProfitBalance(liveAccruedProfit);
-    }
-  }, [liveAccruedProfit]);
-
-  useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !currentUser) return;
 
     const calcLiveProfit = () => {
-      if (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0) {
-        return liveAccruedProfit;
-      }
       const combinedTx = [...(transactions || []), ...(modalWithdrawals || [])];
       return computeLiveUserAccruedProfit(currentUser, deposits, combinedTx);
     };
@@ -120,13 +108,13 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
     return () => clearInterval(timer);
   }, [
     isOpen,
-    liveAccruedProfit,
     currentUser?.email,
     currentUser?.id,
     currentUser?.principalBalance,
     currentUser?.totalDeposit,
     currentUser?.totalWithdrawn,
     currentUser?.depositStartTime,
+    currentUser?.baseEarnedYield,
     deposits?.length,
     transactions?.length,
     modalWithdrawals.length
@@ -134,7 +122,11 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
   if (!isOpen) return null;
 
-  const maxBalanceBN = new BigNumber(liveProfitBalance || availableBalance || 0);
+  const currentAvailableProfit = typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0
+    ? liveAccruedProfit
+    : liveProfitBalance;
+
+  const maxBalanceBN = new BigNumber(currentAvailableProfit || availableBalance || 0);
 
   const getGatewayLabel = (gw: string) => {
     switch (gw) {
@@ -435,12 +427,12 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
                     <span className="text-[11px] text-emerald-300 font-mono font-bold uppercase tracking-wider">Available Profit Balance</span>
                   </div>
                   <span className="text-2xl font-mono font-black text-emerald-400 tracking-tight drop-shadow-[0_0_15px_rgba(52,211,153,0.3)]">
-                    ${liveProfitBalance.toFixed(6)}
+                    ${currentAvailableProfit.toFixed(6)}
                   </span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setAmount(liveProfitBalance.toFixed(2))}
+                  onClick={() => setAmount(currentAvailableProfit.toFixed(2))}
                   className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-mono font-black shadow-lg shadow-emerald-500/30 transition-all cursor-pointer hover:scale-105 active:scale-95"
                 >
                   MAX

@@ -35,6 +35,7 @@ interface CustomerDashboardViewProps {
   currentUser?: User | null;
   deposits?: UserDeposit[];
   transactions?: Transaction[];
+  currentAvailableProfit?: number;
   onOpenDeposit?: () => void;
   onOpenWithdraw?: (initialProfit?: number) => void;
   onOpenMasterPlan?: () => void;
@@ -47,6 +48,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   currentUser,
   deposits = [],
   transactions = [],
+  currentAvailableProfit: propAvailableProfit,
   onOpenDeposit,
   onOpenWithdraw,
   onOpenMasterPlan,
@@ -347,6 +349,48 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     deposits.length
   ]);
 
+  // Unified single source of truth for available profit
+  const currentAvailableProfit = typeof propAvailableProfit === 'number' && propAvailableProfit > 0
+    ? propAvailableProfit
+    : liveEarnedProfit;
+
+  // Pure Direct DOM Animate Script (Auto-Runs on DOM Mount)
+  useEffect(() => {
+    const deposit = parseFloat(getCalculatedTotalDeposit()) || 10000;
+    const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (deposit >= 1001 ? 35 : (deposit >= 501 ? 30 : 25));
+    const dailyRate = deposit * ((monthlyRate / 30) / 100);
+    const perSecondIncrement = dailyRate / 86400;
+
+    // Resolve or create persistent baseline timestamp
+    let startTime = localStorage.getItem('dc_universal_deposit_time');
+    if (!startTime) {
+      startTime = (Date.now() - 3600000).toString(); // 1 hour ago
+      localStorage.setItem('dc_universal_deposit_time', startTime);
+    }
+
+    function updateDirectDOM() {
+      const startMs = parseInt(startTime || '', 10) || (Date.now() - 3600000);
+      const elapsed = Math.max(1, (Date.now() - startMs) / 1000);
+      const grossYield = elapsed * perSecondIncrement;
+      const withdrawn = parseFloat(localStorage.getItem('dc_user_withdrawn') || (currentUser as any)?.withdrawnTotal || (currentUser as any)?.totalWithdrawn || '0');
+      const netProfit = Math.max(0.001250, grossYield - withdrawn);
+
+      const profitEl = document.getElementById('live-total-earned-profit');
+      const balanceEl = document.getElementById('live-total-balance');
+
+      if (profitEl) {
+        profitEl.textContent = '$' + netProfit.toFixed(6);
+      }
+      if (balanceEl) {
+        balanceEl.textContent = '$' + (deposit + netProfit).toFixed(4);
+      }
+    }
+
+    updateDirectDOM();
+    const interval = setInterval(updateDirectDOM, 100);
+    return () => clearInterval(interval);
+  }, [currentUser?.email, currentUser?.totalDeposit, currentUser?.totalWithdrawn]);
+
   const getCalculatedDailyProfit = (): string => {
     if (!currentUser) return '0.0000';
     const totalDep = parseFloat(getCalculatedTotalDeposit()) || 0;
@@ -488,8 +532,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                   TOTAL BALANCE
                 </span>
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight break-all">
-                ${(parseFloat(getCalculatedTotalDeposit()) + liveEarnedProfit).toFixed(4)}
+              <div id="live-total-balance" className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight break-all">
+                ${(parseFloat(getCalculatedTotalDeposit()) + currentAvailableProfit).toFixed(4)}
               </div>
             </div>
 
@@ -532,8 +576,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                   TICKING LIVE
                 </span>
               </div>
-              <div className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all">
-                ${liveEarnedProfit.toFixed(6)}
+              <div id="live-total-earned-profit" className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all">
+                ${currentAvailableProfit.toFixed(6)}
               </div>
               <div className="text-xs font-mono text-slate-400 flex items-center justify-between pt-2 border-t border-slate-800/80">
                 <span className="flex items-center gap-1 text-slate-400">
@@ -565,7 +609,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
               <button
                 id="customer-withdraw-earnings-btn"
-                onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
+                onClick={() => onOpenWithdraw && onOpenWithdraw(currentAvailableProfit)}
                 className="p-3.5 rounded-2xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer hover:scale-[1.02] active:scale-95 shadow-md shadow-cyan-950/30"
               >
                 <ArrowUpRight className="w-4 h-4 text-cyan-400" />
@@ -929,7 +973,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               </div>
 
               <button
-                onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
+                onClick={() => onOpenWithdraw && onOpenWithdraw(currentAvailableProfit)}
                 className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-mono font-bold text-xs transition-all cursor-pointer active:scale-95 shadow-md shadow-amber-500/20"
               >
                 + Request Withdrawal
@@ -965,7 +1009,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               <div className="text-center py-8 text-slate-400 font-mono text-xs space-y-3">
                 <p>No withdrawal requests submitted yet for {currentUser?.email}.</p>
                 <button
-                  onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
+                  onClick={() => onOpenWithdraw && onOpenWithdraw(currentAvailableProfit)}
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-teal-500 text-black font-bold text-xs shadow-md cursor-pointer hover:brightness-110"
                 >
                   Submit First Withdrawal

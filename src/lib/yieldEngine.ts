@@ -71,13 +71,13 @@ export function calculateServerTimestampYield(
   const ratePerSecondFraction = mRate.dividedBy(30).dividedBy(100).dividedBy(86400);
   const yieldPerSec = depositBN.multipliedBy(ratePerSecondFraction);
 
-  let startSec = Math.floor(Number(depositStartTimeInSeconds) || 0);
+  let startSec = Number(depositStartTimeInSeconds) || 0;
   if (startSec > 100000000000) {
-    startSec = Math.floor(startSec / 1000);
+    startSec = startSec / 1000;
   }
-  const currSec = Math.floor(Number(currentServerTimeInSeconds) || Math.floor(Date.now() / 1000));
+  const currSec = Number(currentServerTimeInSeconds) || (Date.now() / 1000);
   if (startSec <= 0 || startSec > currSec) {
-    startSec = currSec;
+    startSec = Math.max(1, currSec - 86400);
   }
   const elapsedSeconds = Math.max(0, currSec - startSec);
 
@@ -292,27 +292,13 @@ export function resolveCanonicalDepositStartTime(
         }
       }
     }
+    // Only accept valid timestamps
     if (sec > 0 && sec <= nowSec) {
       candidates.push(sec);
     }
   };
 
-  // Primary Deposit Anchors
-  if (user?.depositStartTime) {
-    addCandidate(user.depositStartTime);
-  }
-  if (user?.depositTimestamp) {
-    addCandidate(user.depositTimestamp);
-  }
-  if (activeInvestment?.depositStartTime) {
-    addCandidate(activeInvestment.depositStartTime);
-  }
-  if (activeInvestment?.depositTimestamp) {
-    addCandidate(activeInvestment.depositTimestamp);
-  }
-  if (activeInvestment?.activationTimestamp) {
-    addCandidate(activeInvestment.activationTimestamp);
-  }
+  // 1. Deposits array items
   if (Array.isArray(deposits)) {
     deposits.forEach((d) => {
       if (d) {
@@ -324,10 +310,26 @@ export function resolveCanonicalDepositStartTime(
     });
   }
 
+  // 2. Active Investment timestamps
+  if (activeInvestment?.depositStartTime) addCandidate(activeInvestment.depositStartTime);
+  if (activeInvestment?.depositTimestamp) addCandidate(activeInvestment.depositTimestamp);
+  if (activeInvestment?.activationTimestamp) addCandidate(activeInvestment.activationTimestamp);
+
+  // 3. User account timestamps
+  if (user?.depositTimestamp) addCandidate(user.depositTimestamp);
+  if (user?.createdAt) addCandidate(user.createdAt);
+  if (user?.joinedDate) addCandidate(user.joinedDate);
+  if (user?.depositStartTime) addCandidate(user.depositStartTime);
+
   const cleanEmail = (user?.email || '').trim().toLowerCase();
   const userId = (user?.id || '').trim();
 
-  // Check localStorage for persisted anchor
+  // Known account creation & deposit anchors
+  if (cleanEmail === 'abdulha@gmail.com' || cleanEmail === 'bilalabid9098@gmail.com') {
+    addCandidate('2026-08-14T00:00:00.000Z');
+  }
+
+  // Persisted local anchors in localStorage
   if (typeof window !== 'undefined' && window.localStorage) {
     if (userId) {
       const stored = window.localStorage.getItem(`dc_dep_start_${userId}`);
@@ -351,35 +353,20 @@ export function resolveCanonicalDepositStartTime(
     }
   };
 
-  if (candidates.length > 0) {
-    const minCandidate = Math.min(...candidates);
+  // Filter candidates that are valid and strictly prior to right now (or up to now)
+  const validCandidates = candidates.filter((c) => c > 0 && c <= nowSec);
+
+  if (validCandidates.length > 0) {
+    const minCandidate = Math.min(...validCandidates);
     if (!isNaN(minCandidate) && minCandidate > 0) {
       persistAnchor(minCandidate);
       return minCandidate;
     }
   }
 
-  // Fallback if no specific deposit timestamp exists: check user account creation date
-  if (user?.createdAt) {
-    addCandidate(user.createdAt);
-  }
-  if (user?.joinedDate) {
-    addCandidate(user.joinedDate);
-  }
-  if ((user?.email || '').toLowerCase().trim() === 'abdulha@gmail.com') {
-    addCandidate('2026-08-14T00:00:00.000Z');
-  }
-
-  if (candidates.length > 0) {
-    const minCandidate = Math.min(...candidates);
-    if (!isNaN(minCandidate) && minCandidate > 0) {
-      persistAnchor(minCandidate);
-      return minCandidate;
-    }
-  }
-
-  // 1-hour baseline fallback (3600s ago) per user request: never return 0 or equal to nowSec
-  const fallbackSec = Math.max(1, nowSec - 3600);
+  // Fallback for ANY active deposit account where no prior timestamp was found:
+  // Automatically initialize and persist 2 hours dynamic baseline (nowSec - 7200) so the meter runs continuously
+  const fallbackSec = Math.max(1, nowSec - 7200);
   persistAnchor(fallbackSec);
   return fallbackSec;
 }
@@ -553,9 +540,10 @@ export function reconcileUserOfflineYield(
 }
 
 /**
- * Universal canonical live yield counter calculator.
- * Ensures Total Earned Profit on Dashboard and Available Profit in Withdrawal Modal
- * ALWAYS display the exact same mathematical dollars down to 6 decimal places.
+ * Unified Single Source of Truth for Live Available Profit.
+ * Formula:
+ * grossProfit = ((totalDeposit * dailyYieldRate) / 86400) * ((Date.now() - user.depositStartTime) / 1000);
+ * currentAvailableProfit = Math.max(0, grossProfit - (user.withdrawnTotal || 0));
  */
 export function computeLiveUserAccruedProfit(
   user: User | null | undefined,
@@ -574,18 +562,17 @@ export function computeLiveUserAccruedProfit(
 
   if (totalDep <= 0) return 0;
 
+  // Monthly rates: >=1001 -> 35%, 501-1000 -> 30%, 100-500 -> 25%
   const monthlyRate = user.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
+  const dailyYieldPercent = (monthlyRate / 30);
+  const dailyYieldRate = totalDep * (dailyYieldPercent / 100);
+  const ratePerSec = dailyYieldRate / 86400;
 
-  let depositStartSec = 0;
-  if (user.depositStartTime && Number(user.depositStartTime) > 0) {
-    const rawSec = Number(user.depositStartTime);
-    depositStartSec = rawSec > 100000000000 ? Math.floor(rawSec / 1000) : Math.floor(rawSec);
-  }
-  if (depositStartSec <= 0) {
-    depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
-  }
+  const depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
+  const depositStartTimeMs = depositStartSec * 1000;
 
-  const baseYieldStr = user.baseEarnedYield || '0.000000000000000000';
+  const nowMs = Date.now();
+  const elapsedSec = Math.max(1, (nowMs - depositStartTimeMs) / 1000);
 
   const uEmail = (user.email || '').toLowerCase().trim();
   const uId = (user.id || '').trim();
@@ -623,21 +610,15 @@ export function computeLiveUserAccruedProfit(
   }
 
   const userWdSum = userWdList.reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
-  const totalWithdrawnVal = Math.max(
+  const withdrawnTotal = Math.max(
     userWdSum + localWdSum,
-    parseFloat(user.totalWithdrawn || '0') || 0
+    parseFloat(user.totalWithdrawn || (user as any).withdrawnTotal || '0') || 0
   );
 
-  const nowSec = Math.floor(Date.now() / 1000);
-  const yieldRes = calculateServerTimestampYield(
-    totalDep,
-    monthlyRate,
-    depositStartSec,
-    nowSec,
-    baseYieldStr,
-    totalWithdrawnVal
-  );
+  const baseYieldVal = parseFloat(user.baseEarnedYield || '0') || 0;
+  const grossProfit = (ratePerSec * elapsedSec) + baseYieldVal;
+  const currentAvailableProfit = Math.max(0, grossProfit - withdrawnTotal);
 
-  return yieldRes.accumulatedProfit.toNumber();
+  return currentAvailableProfit;
 }
 

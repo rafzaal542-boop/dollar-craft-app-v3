@@ -172,24 +172,14 @@ export default function App() {
         }
 
         // Server-Timestamp Based Accrual Engine Calculation (Anchored to canonical immutable deposit start)
-        const depositStartSec = prevUser.depositStartTime && Number(prevUser.depositStartTime) > 0
-          ? Number(prevUser.depositStartTime)
-          : canonicalDepositStart;
+        const depositStartSec = canonicalDepositStart;
         let baseYieldStr = prevUser.baseEarnedYield || '0.000000000000000000';
         const totalWithdrawnVal = prevUser.totalWithdrawn || '0';
 
         const monthlyYieldPercent = currentInv?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
 
-        const yieldRes = calculateServerTimestampYield(
-          totalDep,
-          monthlyYieldPercent,
-          depositStartSec,
-          nowSec,
-          baseYieldStr,
-          totalWithdrawnVal
-        );
-
-        const calculatedYieldBN = yieldRes.accumulatedProfit;
+        const liveProfitValue = computeLiveUserAccruedProfit(prevUser, deposits, transactions);
+        const calculatedYieldBN = new BigNumber(liveProfitValue);
 
         // Monotonic calculation anchored to depositStartTime & baseEarnedYield
         let currentYieldBN = calculatedYieldBN;
@@ -331,20 +321,10 @@ export default function App() {
               ? String(d.baseEarnedYield)
               : (prevUser.baseEarnedYield || '0.000000000000000000');
 
-            const nowSec = Math.floor(Date.now() / 1000);
             const fsWithdrawn = d.totalWithdrawn !== undefined ? String(d.totalWithdrawn) : (prevUser.totalWithdrawn || '0');
 
-            const monthlyRate = (d.activeInvestment?.monthlyYieldPercent) || (effectiveDepNum >= 1001 ? 35 : (effectiveDepNum >= 501 ? 30 : 25));
-            const yieldRes = calculateServerTimestampYield(
-              effectiveDepNum,
-              monthlyRate,
-              effectiveDepositStart,
-              nowSec,
-              fsBaseYield,
-              fsWithdrawn
-            );
-
-            const finalYieldBN = yieldRes.accumulatedProfit;
+            const calculatedLiveProfit = computeLiveUserAccruedProfit({ ...prevUser, ...d }, deposits, transactions);
+            const finalYieldBN = new BigNumber(calculatedLiveProfit);
             const fsYieldStr = finalYieldBN.toFixed(18);
             const computedTotalBal = Math.max(0, effectiveDepNum + finalYieldBN.toNumber());
 
@@ -418,7 +398,7 @@ export default function App() {
             }
 
             const totalBal = computedTotalBal;
-            const computedDailyProfit = earnedYieldNum > 0 ? earnedYieldNum : yieldRes.accumulatedProfit.toNumber();
+            const computedDailyProfit = earnedYieldNum > 0 ? earnedYieldNum : calculatedLiveProfit;
 
             const updatedUser: User = {
               ...prevUser,
@@ -1411,6 +1391,7 @@ export default function App() {
             currentUser={user}
             deposits={deposits}
             transactions={transactions}
+            currentAvailableProfit={liveAccruedProfit}
             onOpenDeposit={() => setIsDepositOpen(true)}
             onOpenWithdraw={(profit) => {
               if (typeof profit === 'number' && profit > 0) {

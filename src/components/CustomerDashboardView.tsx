@@ -929,7 +929,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               </div>
 
               <button
-                onClick={onOpenWithdraw}
+                onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
                 className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-mono font-bold text-xs transition-all cursor-pointer active:scale-95 shadow-md shadow-amber-500/20"
               >
                 + Request Withdrawal
@@ -965,7 +965,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               <div className="text-center py-8 text-slate-400 font-mono text-xs space-y-3">
                 <p>No withdrawal requests submitted yet for {currentUser?.email}.</p>
                 <button
-                  onClick={onOpenWithdraw}
+                  onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-teal-500 text-black font-bold text-xs shadow-md cursor-pointer hover:brightness-110"
                 >
                   Submit First Withdrawal

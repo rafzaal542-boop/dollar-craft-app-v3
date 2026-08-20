@@ -297,17 +297,18 @@ export function resolveCanonicalDepositStartTime(
     }
   };
 
-  if (user?.depositTimestamp) {
-    addCandidate(user.depositTimestamp);
-  }
+  // Primary Deposit Anchors
   if (user?.depositStartTime) {
     addCandidate(user.depositStartTime);
   }
-  if (activeInvestment?.depositTimestamp) {
-    addCandidate(activeInvestment.depositTimestamp);
+  if (user?.depositTimestamp) {
+    addCandidate(user.depositTimestamp);
   }
   if (activeInvestment?.depositStartTime) {
     addCandidate(activeInvestment.depositStartTime);
+  }
+  if (activeInvestment?.depositTimestamp) {
+    addCandidate(activeInvestment.depositTimestamp);
   }
   if (activeInvestment?.activationTimestamp) {
     addCandidate(activeInvestment.activationTimestamp);
@@ -321,15 +322,6 @@ export function resolveCanonicalDepositStartTime(
         addCandidate((d as any).createdAt);
       }
     });
-  }
-  if (user?.createdAt) {
-    addCandidate(user.createdAt);
-  }
-  if (user?.joinedDate) {
-    addCandidate(user.joinedDate);
-  }
-  if ((user?.email || '').toLowerCase().trim() === 'abdulha@gmail.com') {
-    addCandidate('2026-08-14T00:00:00.000Z');
   }
 
   const cleanEmail = (user?.email || '').trim().toLowerCase();
@@ -358,6 +350,25 @@ export function resolveCanonicalDepositStartTime(
       }
     }
   };
+
+  if (candidates.length > 0) {
+    const minCandidate = Math.min(...candidates);
+    if (!isNaN(minCandidate) && minCandidate > 0) {
+      persistAnchor(minCandidate);
+      return minCandidate;
+    }
+  }
+
+  // Fallback if no specific deposit timestamp exists: check user account creation date
+  if (user?.createdAt) {
+    addCandidate(user.createdAt);
+  }
+  if (user?.joinedDate) {
+    addCandidate(user.joinedDate);
+  }
+  if ((user?.email || '').toLowerCase().trim() === 'abdulha@gmail.com') {
+    addCandidate('2026-08-14T00:00:00.000Z');
+  }
 
   if (candidates.length > 0) {
     const minCandidate = Math.min(...candidates);
@@ -549,7 +560,7 @@ export function reconcileUserOfflineYield(
 export function computeLiveUserAccruedProfit(
   user: User | null | undefined,
   deposits: UserDeposit[] = [],
-  transactions: Transaction[] = []
+  transactions: any[] = []
 ): number {
   if (!user) return 0;
   
@@ -564,8 +575,17 @@ export function computeLiveUserAccruedProfit(
   if (totalDep <= 0) return 0;
 
   const monthlyRate = user.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
-  const dailyRate = monthlyRate / 30 / 100;
-  const perSecondRate = (totalDep * dailyRate) / 86400;
+
+  let depositStartSec = 0;
+  if (user.depositStartTime && Number(user.depositStartTime) > 0) {
+    const rawSec = Number(user.depositStartTime);
+    depositStartSec = rawSec > 100000000000 ? Math.floor(rawSec / 1000) : Math.floor(rawSec);
+  }
+  if (depositStartSec <= 0) {
+    depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
+  }
+
+  const baseYieldStr = user.baseEarnedYield || '0.000000000000000000';
 
   const uEmail = (user.email || '').toLowerCase().trim();
   const uId = (user.id || '').trim();
@@ -579,18 +599,24 @@ export function computeLiveUserAccruedProfit(
   let localWdSum = 0;
   if (typeof window !== 'undefined' && uEmail) {
     try {
-      const rawWd = localStorage.getItem('dollar_craft_withdrawals') || localStorage.getItem('dc_withdrawals');
-      if (rawWd) {
-        const parsed = JSON.parse(rawWd);
-        if (Array.isArray(parsed)) {
-          localWdSum = parsed
-            .filter((w: any) => {
-              if (w.status === 'REJECTED') return false;
+      const keys = ['dollar_craft_withdrawals', 'dc_withdrawals', 'dollar_craft_transactions', 'dc_transactions'];
+      for (const k of keys) {
+        const rawWd = localStorage.getItem(k);
+        if (rawWd) {
+          const parsed = JSON.parse(rawWd);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((w: any) => {
+              if (w.status === 'REJECTED') return;
               const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
               const wUserId = (w.userId || '').trim();
-              return (uEmail && wEmail === uEmail) || (uId && wUserId === uId);
-            })
-            .reduce((sum: number, w: any) => sum + (parseFloat(w.amount || '0') || 0), 0);
+              if ((uEmail && wEmail === uEmail) || (uId && wUserId === uId)) {
+                const exists = userWdList.some((uw: any) => (uw.id && w.id && uw.id === w.id) || (uw.txHash && w.txHash && uw.txHash === w.txHash));
+                if (!exists) {
+                  localWdSum += parseFloat(w.amount || '0') || 0;
+                }
+              }
+            });
+          }
         }
       }
     } catch (_) {}
@@ -598,27 +624,20 @@ export function computeLiveUserAccruedProfit(
 
   const userWdSum = userWdList.reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
   const totalWithdrawnVal = Math.max(
-    userWdSum,
-    localWdSum,
+    userWdSum + localWdSum,
     parseFloat(user.totalWithdrawn || '0') || 0
   );
 
-  const effStart = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
-  const effStartMs = effStart > 100000000000 ? effStart : effStart * 1000;
-  const now = Date.now();
-  const elapsedSeconds = Math.max(1, (now - effStartMs) / 1000);
-  const grossAccrued = perSecondRate * elapsedSeconds;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const yieldRes = calculateServerTimestampYield(
+    totalDep,
+    monthlyRate,
+    depositStartSec,
+    nowSec,
+    baseYieldStr,
+    totalWithdrawnVal
+  );
 
-  const netAccrued = grossAccrued - totalWithdrawnVal;
-  let effectiveYield = netAccrued;
-  if (effectiveYield <= 0 && totalDep > 0) {
-    const lastWdTime = userWdList.length > 0
-      ? Math.max(...userWdList.map((w: any) => new Date(w.createdAt || 0).getTime()))
-      : effStartMs;
-    const elapsedSinceWd = Math.max(1, (now - (lastWdTime > 0 ? lastWdTime : effStartMs)) / 1000);
-    effectiveYield = Math.max(0.000001, elapsedSinceWd * perSecondRate);
-  }
-
-  return effectiveYield;
+  return yieldRes.accumulatedProfit.toNumber();
 }
 

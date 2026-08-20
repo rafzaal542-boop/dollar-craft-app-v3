@@ -568,6 +568,36 @@ export default function App() {
   const [selectedPlanForDeposit, setSelectedPlanForDeposit] = useState<string>('plan-standard');
   const [isWithdrawalOpen, setIsWithdrawalOpen] = useState<boolean>(false);
   const [liveAccruedProfit, setLiveAccruedProfit] = useState<number>(0);
+
+  // Universal continuous 100ms live yield counter at App root level for all users
+  useEffect(() => {
+    if (!user) {
+      setLiveAccruedProfit(0);
+      return;
+    }
+
+    const calcLive = () => {
+      return computeLiveUserAccruedProfit(user, deposits, transactions);
+    };
+
+    setLiveAccruedProfit(calcLive());
+
+    const timer = setInterval(() => {
+      setLiveAccruedProfit(calcLive());
+    }, 100);
+
+    return () => clearInterval(timer);
+  }, [
+    user?.id,
+    user?.email,
+    user?.principalBalance,
+    user?.totalDeposit,
+    user?.totalWithdrawn,
+    user?.depositStartTime,
+    user?.baseEarnedYield,
+    deposits.length,
+    transactions.length
+  ]);
   const [isAdminOpen, setIsAdminOpen] = useState<boolean>(false);
   const [isAccessDeniedOpen, setIsAccessDeniedOpen] = useState<boolean>(false);
   const [isMasterPlanOpen, setIsMasterPlanOpen] = useState<boolean>(false);

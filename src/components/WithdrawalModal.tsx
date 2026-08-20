@@ -29,6 +29,7 @@ interface WithdrawalModalProps {
   onClose: () => void;
   availableBalance?: string;
   earnedYield?: string;
+  liveAccruedProfit?: number;
   currentUser?: User | null;
   deposits?: UserDeposit[];
   transactions?: any[];
@@ -40,6 +41,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
   onClose,
   availableBalance,
   earnedYield,
+  liveAccruedProfit,
   currentUser,
   deposits,
   transactions = [],
@@ -86,13 +88,25 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
   // Real-time synchronization of exact same live accrued profit as Total Earned Profit
   const [liveProfitBalance, setLiveProfitBalance] = useState<number>(() => {
+    if (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0) {
+      return liveAccruedProfit;
+    }
     return computeLiveUserAccruedProfit(currentUser, deposits, transactions);
   });
+
+  useEffect(() => {
+    if (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0) {
+      setLiveProfitBalance(liveAccruedProfit);
+    }
+  }, [liveAccruedProfit]);
 
   useEffect(() => {
     if (!isOpen) return;
 
     const calcLiveProfit = () => {
+      if (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0) {
+        return liveAccruedProfit;
+      }
       const combinedTx = [...(transactions || []), ...(modalWithdrawals || [])];
       return computeLiveUserAccruedProfit(currentUser, deposits, combinedTx);
     };
@@ -106,6 +120,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
     return () => clearInterval(timer);
   }, [
     isOpen,
+    liveAccruedProfit,
     currentUser?.email,
     currentUser?.id,
     currentUser?.principalBalance,

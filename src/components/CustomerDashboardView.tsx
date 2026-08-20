@@ -36,7 +36,7 @@ interface CustomerDashboardViewProps {
   deposits?: UserDeposit[];
   transactions?: Transaction[];
   onOpenDeposit?: () => void;
-  onOpenWithdraw?: () => void;
+  onOpenWithdraw?: (initialProfit?: number) => void;
   onOpenMasterPlan?: () => void;
   onOpenAuth?: (mode?: 'login' | 'signup') => void;
   onOpenInternalTransfer?: () => void;
@@ -518,7 +518,10 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
             </div>
 
             {/* Row 3: Live Real-Time Accrued Yield & Daily Rate */}
-            <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-[#0B152C] via-[#081226] to-[#060D1E] border border-amber-500/40 space-y-2.5 shadow-xl hover:border-amber-400/70 transition-all">
+            <div 
+              id="customer-total-earned-profit-card"
+              className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-[#0B152C] via-[#081226] to-[#060D1E] border border-amber-500/40 space-y-2.5 shadow-xl hover:border-amber-400/70 transition-all"
+            >
               <div className="flex items-center justify-between text-slate-400 font-mono text-xs">
                 <span className="uppercase font-bold flex items-center gap-2 text-amber-300 tracking-wider">
                   <TrendingUp className="w-4.5 h-4.5 text-amber-400" />
@@ -552,6 +555,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <button
+                id="customer-deposit-funds-btn"
                 onClick={onOpenDeposit}
                 className="p-3.5 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer hover:scale-[1.02] active:scale-95 shadow-md shadow-emerald-950/30"
               >
@@ -560,7 +564,8 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               </button>
 
               <button
-                onClick={onOpenWithdraw}
+                id="customer-withdraw-earnings-btn"
+                onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
                 className="p-3.5 rounded-2xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer hover:scale-[1.02] active:scale-95 shadow-md shadow-cyan-950/30"
               >
                 <ArrowUpRight className="w-4 h-4 text-cyan-400" />

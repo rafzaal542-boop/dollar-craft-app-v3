@@ -567,6 +567,7 @@ export default function App() {
   const [isDepositOpen, setIsDepositOpen] = useState<boolean>(false);
   const [selectedPlanForDeposit, setSelectedPlanForDeposit] = useState<string>('plan-standard');
   const [isWithdrawalOpen, setIsWithdrawalOpen] = useState<boolean>(false);
+  const [liveAccruedProfit, setLiveAccruedProfit] = useState<number>(0);
   const [isAdminOpen, setIsAdminOpen] = useState<boolean>(false);
   const [isAccessDeniedOpen, setIsAccessDeniedOpen] = useState<boolean>(false);
   const [isMasterPlanOpen, setIsMasterPlanOpen] = useState<boolean>(false);
@@ -1381,7 +1382,12 @@ export default function App() {
             deposits={deposits}
             transactions={transactions}
             onOpenDeposit={() => setIsDepositOpen(true)}
-            onOpenWithdraw={() => setIsWithdrawalOpen(true)}
+            onOpenWithdraw={(profit) => {
+              if (typeof profit === 'number' && profit > 0) {
+                setLiveAccruedProfit(profit);
+              }
+              setIsWithdrawalOpen(true);
+            }}
             onOpenMasterPlan={() => setIsMasterPlanOpen(true)}
             onOpenAuth={handleOpenAuth}
             onRefreshData={fetchState}
@@ -1544,6 +1550,7 @@ export default function App() {
         onClose={() => setIsWithdrawalOpen(false)}
         availableBalance={user ? user.earnedYield || '0' : '0'}
         earnedYield={user?.earnedYield || '0'}
+        liveAccruedProfit={liveAccruedProfit}
         currentUser={user}
         deposits={deposits}
         transactions={transactions}

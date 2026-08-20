@@ -564,7 +564,7 @@ export default function App() {
 
     const timer = setInterval(() => {
       setLiveAccruedProfit(calcLive());
-    }, 100);
+    }, 50);
 
     return () => clearInterval(timer);
   }, [
@@ -1026,13 +1026,13 @@ export default function App() {
     const newYieldBN = BigNumber.max(0, userYieldBN.minus(amount));
     const newYieldStr = newYieldBN.toFixed(18);
     const newDailyProfit = newYieldBN.toNumber();
-    const newWithdrawnStr = new BigNumber(user.totalWithdrawn || '0').plus(amount).toFixed(18);
+    const newWithdrawnNum = (parseFloat(String(user.withdrawnTotal || user.totalWithdrawn || '0')) || 0) + amount;
+    const newWithdrawnStr = newWithdrawnNum.toFixed(18);
     const totalDepNum = parseFloat(String(user.totalDeposit || user.principalBalance || '0')) || 0;
     const newTotBal = Math.max(0, totalDepNum + newYieldBN.toNumber());
     const nowSec = Math.floor(Date.now() / 1000);
     const updatedInv = user.activeInvestment ? {
       ...user.activeInvestment,
-      depositStartTime: nowSec,
       lastCalculatedTimestamp: Date.now()
     } : null;
 
@@ -1041,9 +1041,9 @@ export default function App() {
       earnedYield: newYieldStr,
       dailyProfit: newDailyProfit,
       totalWithdrawn: newWithdrawnStr,
+      withdrawnTotal: newWithdrawnStr,
       totalBalance: newTotBal,
       baseEarnedYield: newYieldStr,
-      depositStartTime: nowSec,
       activeInvestment: updatedInv
     };
 
@@ -1072,11 +1072,14 @@ export default function App() {
     // 3. Save updated user state and transaction to LocalStorage immediately
     try {
       localStorage.setItem('dollarcraft_active_user', JSON.stringify(updatedUser));
+      if (user.email) {
+        const uEmail = user.email.toLowerCase().trim();
+        localStorage.setItem(`dc_withdrawn_${uEmail}`, newWithdrawnNum.toString());
+        localStorage.setItem('dc_user_withdrawn', newWithdrawnNum.toString());
+        localStorage.setItem(`dollarcraft_accumulated_profit_${uEmail}`, newYieldStr);
+      }
       if (user.id) {
         localStorage.setItem(`dollarcraft_accumulated_profit_${user.id}`, newYieldStr);
-      }
-      if (user.email) {
-        localStorage.setItem(`dollarcraft_accumulated_profit_${user.email.toLowerCase().trim()}`, newYieldStr);
       }
 
       const userKeys = ['dollar_craft_users', 'dollar_craft_registered_users', 'dc_registered_users', 'registered_users'];

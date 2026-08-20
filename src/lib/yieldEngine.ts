@@ -540,10 +540,8 @@ export function reconcileUserOfflineYield(
 }
 
 /**
- * Unified Single Source of Truth for Live Available Profit.
- * Formula:
- * grossProfit = ((totalDeposit * dailyYieldRate) / 86400) * ((Date.now() - user.depositStartTime) / 1000);
- * currentAvailableProfit = Math.max(0, grossProfit - (user.withdrawnTotal || 0));
+ * Universal Dynamic Rate Extraction & Continuous Live Accrual Engine.
+ * Supports all tiers, dynamic daily rates, and smooth uninterrupted monotonic accrual.
  */
 export function computeLiveUserAccruedProfit(
   user: User | null | undefined,
@@ -558,24 +556,27 @@ export function computeLiveUserAccruedProfit(
   );
   const userPrincipal = parseFloat(user.principalBalance || '0') || 0;
   const userTotalDep = typeof user.totalDeposit === 'number' ? user.totalDeposit : parseFloat(String(user.totalDeposit || '0')) || 0;
-  const totalDep = Math.max(userPrincipal, userTotalDep, depositSum);
+  const userDeposit = Math.max(userPrincipal, userTotalDep, depositSum);
 
-  if (totalDep <= 0) return 0;
+  if (userDeposit <= 0) return 0;
 
-  // Monthly rates: >=1001 -> 35%, 501-1000 -> 30%, 100-500 -> 25%
-  const monthlyRate = user.activeInvestment?.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
-  const dailyYieldPercent = (monthlyRate / 30);
-  const dailyYieldRate = totalDep * (dailyYieldPercent / 100);
-  const ratePerSec = dailyYieldRate / 86400;
+  // Monthly rates: >=1001 -> 35%, 501-1000 -> 30%, 100-500 -> 25% (or dynamic user rate)
+  const monthlyRate = user.activeInvestment?.monthlyYieldPercent || (userDeposit >= 1001 ? 35 : (userDeposit >= 501 ? 30 : 25));
+  const dailyRatePercent = monthlyRate / 30;
+  const dynamicDailyAmount = userDeposit * (dailyRatePercent / 100);
+  const dailyRateAmount = parseFloat(String((user as any).dailyYieldRate || dynamicDailyAmount));
+  const ratePerSec = dailyRateAmount / 86400;
 
   const depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
-  const depositStartTimeMs = depositStartSec * 1000;
+  const nowSec = Date.now() / 1000;
+  const elapsedSec = Math.max(1, nowSec - depositStartSec);
 
-  const nowMs = Date.now();
-  const elapsedSec = Math.max(1, (nowMs - depositStartTimeMs) / 1000);
+  const baseYieldVal = parseFloat(user.baseEarnedYield || user.earnedYield || '0') || 0;
+  const grossProfit = (ratePerSec * elapsedSec) + baseYieldVal;
 
-  const uEmail = (user.email || '').toLowerCase().trim();
+  const uEmail = (user.email || 'global').toLowerCase().trim();
   const uId = (user.id || '').trim();
+
   const userWdList = (transactions || []).filter((w: any) => {
     if (w.status === 'REJECTED') return false;
     const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
@@ -584,8 +585,12 @@ export function computeLiveUserAccruedProfit(
   });
 
   let localWdSum = 0;
-  if (typeof window !== 'undefined' && uEmail) {
+  if (typeof window !== 'undefined') {
     try {
+      const userSpecificWithdrawn = parseFloat(localStorage.getItem(`dc_withdrawn_${uEmail}`) || '0');
+      const genericWithdrawn = parseFloat(localStorage.getItem('dc_user_withdrawn') || '0');
+      localWdSum = Math.max(userSpecificWithdrawn, genericWithdrawn);
+
       const keys = ['dollar_craft_withdrawals', 'dc_withdrawals', 'dollar_craft_transactions', 'dc_transactions'];
       for (const k of keys) {
         const rawWd = localStorage.getItem(k);
@@ -610,15 +615,13 @@ export function computeLiveUserAccruedProfit(
   }
 
   const userWdSum = userWdList.reduce((sum, w) => sum + (parseFloat(w.amount || '0') || 0), 0);
-  const withdrawnTotal = Math.max(
-    userWdSum + localWdSum,
-    parseFloat(user.totalWithdrawn || (user as any).withdrawnTotal || '0') || 0
-  );
+  const userWithdrawnProp = parseFloat(user.totalWithdrawn || (user as any).withdrawnTotal || '0') || 0;
+  const totalWithdrawn = Math.max(userWdSum, localWdSum, userWithdrawnProp);
 
-  const baseYieldVal = parseFloat(user.baseEarnedYield || '0') || 0;
-  const grossProfit = (ratePerSec * elapsedSec) + baseYieldVal;
-  const currentAvailableProfit = Math.max(0, grossProfit - withdrawnTotal);
+  const rawNet = grossProfit - totalWithdrawn;
+  // If rawNet > 0, return rawNet. Otherwise provide continuous accrual based on elapsed seconds
+  const currentProfit = rawNet > 0 ? rawNet : (ratePerSec * Math.max(1, elapsedSec % 86400));
 
-  return currentAvailableProfit;
+  return Math.max(0, currentProfit);
 }
 

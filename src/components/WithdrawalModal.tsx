@@ -103,7 +103,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
     const timer = setInterval(() => {
       setLiveProfitBalance(calcLiveProfit());
-    }, 100);
+    }, 50);
 
     return () => clearInterval(timer);
   }, [

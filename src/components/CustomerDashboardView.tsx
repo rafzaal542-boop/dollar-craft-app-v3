@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { User, UserDeposit, Transaction } from '../types';
 import { getPlanRates, calculateServerTimestampYield, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit } from '../lib/yieldEngine';
@@ -315,88 +315,66 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     return Math.max(userPrincipal, userTotalDep, depositSum, transferSum).toFixed(4);
   };
 
-  const [liveEarnedProfit, setLiveEarnedProfit] = useState<number>(0);
+  const [liveEarnedProfit, setLiveEarnedProfit] = useState<number>(() => {
+    return computeLiveUserAccruedProfit(currentUser, deposits, displayWithdrawals);
+  });
+  const profitRef = useRef<number>(0);
 
-  // Active React ticker state binding & continuous 100ms live loop that NEVER stops
   useEffect(() => {
     if (!currentUser) {
       setLiveEarnedProfit(0);
+      profitRef.current = 0;
       return;
     }
 
-    const computeExact = () => {
+    const calcCurrentProfit = () => {
       return computeLiveUserAccruedProfit(currentUser, deposits, displayWithdrawals);
     };
 
-    // Immediate non-zero seed on mount/login
-    setLiveEarnedProfit(computeExact());
+    const updateCounter = () => {
+      const live = calcCurrentProfit();
+      profitRef.current = live;
+      setLiveEarnedProfit(live);
 
-    // Active continuous 100ms ticker loop
-    const timer = setInterval(() => {
-      setLiveEarnedProfit(computeExact());
-    }, 100);
+      const totalDep = parseFloat(getCalculatedTotalDeposit()) || parseFloat(String(currentUser.totalDeposit || currentUser.principalBalance || 0)) || 0;
+      const profitEl = document.getElementById('live-total-earned-profit');
+      const balanceEl = document.getElementById('live-total-balance');
+      if (profitEl) {
+        profitEl.textContent = '$' + live.toFixed(6);
+      }
+      if (balanceEl) {
+        balanceEl.textContent = '$' + (totalDep + live).toFixed(4);
+      }
+    };
 
-    return () => clearInterval(timer);
+    updateCounter();
+    const intervalId = setInterval(updateCounter, 50);
+
+    return () => clearInterval(intervalId);
   }, [
     currentUser?.email,
     currentUser?.id,
-    currentUser?.principalBalance,
     currentUser?.totalDeposit,
+    currentUser?.principalBalance,
     currentUser?.totalWithdrawn,
+    currentUser?.withdrawnTotal,
+    currentUser?.dailyYieldRate,
+    currentUser?.activeInvestment?.monthlyYieldPercent,
     currentUser?.depositStartTime,
     currentUser?.baseEarnedYield,
     displayWithdrawals.length,
     deposits.length
   ]);
 
-  // Unified single source of truth for available profit
-  const currentAvailableProfit = typeof propAvailableProfit === 'number' && propAvailableProfit > 0
-    ? propAvailableProfit
-    : liveEarnedProfit;
-
-  // Pure Direct DOM Animate Script (Auto-Runs on DOM Mount)
-  useEffect(() => {
-    const deposit = parseFloat(getCalculatedTotalDeposit()) || 10000;
-    const monthlyRate = currentUser?.activeInvestment?.monthlyYieldPercent || (deposit >= 1001 ? 35 : (deposit >= 501 ? 30 : 25));
-    const dailyRate = deposit * ((monthlyRate / 30) / 100);
-    const perSecondIncrement = dailyRate / 86400;
-
-    // Resolve or create persistent baseline timestamp
-    let startTime = localStorage.getItem('dc_universal_deposit_time');
-    if (!startTime) {
-      startTime = (Date.now() - 3600000).toString(); // 1 hour ago
-      localStorage.setItem('dc_universal_deposit_time', startTime);
-    }
-
-    function updateDirectDOM() {
-      const startMs = parseInt(startTime || '', 10) || (Date.now() - 3600000);
-      const elapsed = Math.max(1, (Date.now() - startMs) / 1000);
-      const grossYield = elapsed * perSecondIncrement;
-      const withdrawn = parseFloat(localStorage.getItem('dc_user_withdrawn') || (currentUser as any)?.withdrawnTotal || (currentUser as any)?.totalWithdrawn || '0');
-      const netProfit = Math.max(0.001250, grossYield - withdrawn);
-
-      const profitEl = document.getElementById('live-total-earned-profit');
-      const balanceEl = document.getElementById('live-total-balance');
-
-      if (profitEl) {
-        profitEl.textContent = '$' + netProfit.toFixed(6);
-      }
-      if (balanceEl) {
-        balanceEl.textContent = '$' + (deposit + netProfit).toFixed(4);
-      }
-    }
-
-    updateDirectDOM();
-    const interval = setInterval(updateDirectDOM, 100);
-    return () => clearInterval(interval);
-  }, [currentUser?.email, currentUser?.totalDeposit, currentUser?.totalWithdrawn]);
-
   const getCalculatedDailyProfit = (): string => {
     if (!currentUser) return '0.0000';
     const totalDep = parseFloat(getCalculatedTotalDeposit()) || 0;
     if (totalDep <= 0) return '0.0000';
     const rates = getPlanRates(totalDep);
-    const dailyProfit24h = totalDep * (rates.dailyYieldPercent / 100);
+    const monthlyRate = currentUser.activeInvestment?.monthlyYieldPercent || rates.monthlyYieldPercent;
+    const dailyProfit24h = (currentUser as any).dailyYieldRate 
+      ? parseFloat(String((currentUser as any).dailyYieldRate)) 
+      : (totalDep * ((monthlyRate / 30) / 100));
     return dailyProfit24h.toFixed(4);
   };
 
@@ -533,7 +511,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                 </span>
               </div>
               <div id="live-total-balance" className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight break-all">
-                ${(parseFloat(getCalculatedTotalDeposit()) + currentAvailableProfit).toFixed(4)}
+                ${(parseFloat(getCalculatedTotalDeposit()) + liveEarnedProfit).toFixed(4)}
               </div>
             </div>
 
@@ -577,13 +555,13 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                 </span>
               </div>
               <div id="live-total-earned-profit" className="text-3xl sm:text-4xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all">
-                ${currentAvailableProfit.toFixed(6)}
+                ${liveEarnedProfit.toFixed(6)}
               </div>
               <div className="text-xs font-mono text-slate-400 flex items-center justify-between pt-2 border-t border-slate-800/80">
                 <span className="flex items-center gap-1 text-slate-400">
                   Daily Yield Rate (24h Profit):
                 </span>
-                <span className="text-emerald-400 font-bold">
+                <span className="text-emerald-400 font-bold font-mono tracking-tight bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/30">
                   +${getCalculatedDailyProfit()}/day
                 </span>
               </div>
@@ -609,7 +587,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
               <button
                 id="customer-withdraw-earnings-btn"
-                onClick={() => onOpenWithdraw && onOpenWithdraw(currentAvailableProfit)}
+                onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
                 className="p-3.5 rounded-2xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer hover:scale-[1.02] active:scale-95 shadow-md shadow-cyan-950/30"
               >
                 <ArrowUpRight className="w-4 h-4 text-cyan-400" />
@@ -973,7 +951,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               </div>
 
               <button
-                onClick={() => onOpenWithdraw && onOpenWithdraw(currentAvailableProfit)}
+                onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
                 className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-mono font-bold text-xs transition-all cursor-pointer active:scale-95 shadow-md shadow-amber-500/20"
               >
                 + Request Withdrawal
@@ -1009,7 +987,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
               <div className="text-center py-8 text-slate-400 font-mono text-xs space-y-3">
                 <p>No withdrawal requests submitted yet for {currentUser?.email}.</p>
                 <button
-                  onClick={() => onOpenWithdraw && onOpenWithdraw(currentAvailableProfit)}
+                  onClick={() => onOpenWithdraw && onOpenWithdraw(liveEarnedProfit)}
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-teal-500 text-black font-bold text-xs shadow-md cursor-pointer hover:brightness-110"
                 >
                   Submit First Withdrawal

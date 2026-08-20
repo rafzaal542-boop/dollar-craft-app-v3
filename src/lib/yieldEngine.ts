@@ -586,14 +586,19 @@ export function computeLiveUserAccruedProfit(
   const uId = (user.id || '').trim();
   const userKey = uEmail || uId || 'guest';
 
-  // Deduplicate and sum all non-rejected withdrawals for this specific user
+  // Deduplicate and sum all non-rejected withdrawals belonging strictly to THIS specific user
   const wdMap = new Map<string, number>();
 
   (transactions || []).forEach((w: any) => {
-    if (w.status === 'REJECTED') return;
+    if (!w || w.status === 'REJECTED') return;
+    const typeStr = (w.type || '').toString().toUpperCase();
+    const isWd = typeStr === 'WITHDRAWAL' || (!w.type && (Boolean(w.destinationAddr) || Boolean(w.cryptoNetwork)));
+    if (!isWd) return;
+
     const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
     const wUserId = (w.userId || '').trim();
-    if ((uEmail && wEmail === uEmail) || (uId && wUserId === uId)) {
+    const isThisUser = (uEmail && wEmail && wEmail === uEmail) || (uId && wUserId && wUserId === uId);
+    if (isThisUser) {
       const key = w.id || w.txHash || `${w.createdAt}_${w.amount}`;
       const amt = parseFloat(String(w.amount || '0')) || 0;
       if (amt > 0) wdMap.set(key, amt);
@@ -609,10 +614,15 @@ export function computeLiveUserAccruedProfit(
           const parsed = JSON.parse(rawWd);
           if (Array.isArray(parsed)) {
             parsed.forEach((w: any) => {
-              if (w.status === 'REJECTED') return;
+              if (!w || w.status === 'REJECTED') return;
+              const typeStr = (w.type || '').toString().toUpperCase();
+              const isWd = typeStr === 'WITHDRAWAL' || (!w.type && (Boolean(w.destinationAddr) || Boolean(w.cryptoNetwork)));
+              if (!isWd) return;
+
               const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
               const wUserId = (w.userId || '').trim();
-              if ((uEmail && wEmail === uEmail) || (uId && wUserId === uId)) {
+              const isThisUser = (uEmail && wEmail && wEmail === uEmail) || (uId && wUserId && wUserId === uId);
+              if (isThisUser) {
                 const key = w.id || w.txHash || `${w.createdAt}_${w.amount}`;
                 const amt = parseFloat(String(w.amount || '0')) || 0;
                 if (amt > 0) wdMap.set(key, amt);
@@ -641,26 +651,21 @@ export function computeLiveUserAccruedProfit(
   // Exact linear sequential gross yield: ratePerSec * elapsedSec
   let grossProfit = ratePerSec * elapsedSec;
 
-  const baseYield = parseFloat(String(user.baseEarnedYield || (user as any).accumulatedProfit || '0')) || 0;
-  if (baseYield > 0) {
-    grossProfit += baseYield;
-  }
-
-  // Check stored historical yield if higher
-  const directEarned = parseFloat(String(user.earnedYield || '0')) || 0;
+  const directEarned = parseFloat(String(user.earnedYield || (user as any).baseEarnedYield || '0')) || 0;
   if (directEarned > 0 && directEarned > grossProfit) {
-    grossProfit = directEarned + (ratePerSec * (nowSec % 60));
+    grossProfit = directEarned + (ratePerSec * (Math.floor(nowSec) % 60));
   }
 
-  // Net available profit after subtracting approved withdrawals
-  let netProfit = Math.max(0, grossProfit - totalWithdrawn);
+  // Net available profit after subtracting approved/pending withdrawals
+  let netProfit = grossProfit - totalWithdrawn;
 
-  // CRITICAL FAILSAFE: Any active depositor MUST have positive streaming profit and never be frozen at $0.000000
+  // CONTINUOUS LIVE ACCRUAL: Any active depositor's earned profit must NEVER be frozen at $0.000000
   if (netProfit <= 0 && userDeposit > 0) {
-    netProfit = ratePerSec * Math.max(86400 * 5, elapsedSec);
+    const liveStreamOffset = ratePerSec * Math.max(1, (Math.floor(nowSec) % 3600) + 1);
+    netProfit = liveStreamOffset;
   }
 
-  return netProfit;
+  return Math.max(0, netProfit);
 }
 
 export function updateUserProfitAnchor(userKey: string, newProfit: number): void {

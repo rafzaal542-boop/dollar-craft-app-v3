@@ -393,7 +393,7 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
     const elapsed = Math.max(0, nowSecForConsolidation - canonicalDepStartSec);
     const grossAccrued = ratePerSec.multipliedBy(elapsed);
     const calculatedNetBN = BigNumber.max(0, grossAccrued.minus(effectiveWithdrawnBN));
-    const netYieldBN = BigNumber.max(calculatedNetBN, maxEarnedBN);
+    const netYieldBN = calculatedNetBN;
 
     canonicalUser.earnedYield = netYieldBN.toFixed(18);
     canonicalUser.dailyProfit = netYieldBN.toNumber();
@@ -598,10 +598,7 @@ async function ensureUserSyncedFromFirestore(rawEmail?: string, rawId?: string):
 
       const docBase = userDocData.baseEarnedYield !== undefined ? new BigNumber(userDocData.baseEarnedYield) : new BigNumber(0);
       const inMemBase = new BigNumber(canonicalUser.baseEarnedYield || '0');
-      const docYield = userDocData.earnedYield !== undefined ? new BigNumber(userDocData.earnedYield) : new BigNumber(0);
-      const inMemYield = new BigNumber((canonicalUser as any).earnedYield || '0');
-      const inMemProfit = new BigNumber((canonicalUser as any).totalProfit || '0');
-      const baseYieldBN = BigNumber.max(docBase, inMemBase, docYield, inMemYield, inMemProfit);
+      const baseYieldBN = BigNumber.max(docBase, inMemBase, 0);
       canonicalUser.baseEarnedYield = baseYieldBN.toFixed(18);
 
       const docDep = userDocData.totalDeposit !== undefined ? Number(userDocData.totalDeposit) : Number(canonicalUser.principalBalance);

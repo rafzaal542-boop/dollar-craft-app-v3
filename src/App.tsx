@@ -711,8 +711,7 @@ export default function App() {
 
             const finalYieldBN = BigNumber.max(
               0,
-              yieldRes.accumulatedProfit,
-              new BigNumber(data.user.earnedYield || 0).minus(maxWithdrawnBN)
+              yieldRes.accumulatedProfit
             );
             const finalYieldStr = finalYieldBN.toFixed(18);
             const totalBalNum = Math.max(0, totalDepNum + finalYieldBN.toNumber());

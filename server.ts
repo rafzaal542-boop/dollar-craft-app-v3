@@ -350,9 +350,6 @@ function consolidateUserByEmail(email: string, reqId?: string): User | null {
     addStartCand(u.activeInvestment?.depositTimestamp);
     addStartCand(u.activeInvestment?.depositStartTime);
     addStartCand(u.activeInvestment?.activationTimestamp);
-    addStartCand(u.createdAt);
-    addStartCand(u.joinedDate);
-    addStartCand((u as any).created_at);
   });
 
   userDeps.forEach((d) => {

@@ -77,7 +77,7 @@ export function calculateServerTimestampYield(
   }
   const currSec = Number(currentServerTimeInSeconds) || (Date.now() / 1000);
   if (startSec <= 0 || startSec > currSec) {
-    startSec = Math.max(1, currSec - 86400);
+    startSec = currSec;
   }
   const elapsedSeconds = Math.max(0, currSec - startSec);
 
@@ -277,9 +277,6 @@ export function resolveCanonicalDepositStartTime(
   const cleanEmail = (user?.email || '').trim().toLowerCase();
   const userId = (user?.id || '').trim();
 
-  // Canonical baseline anchor for DollarCraft contract cycles: August 10, 2026 00:00:00 UTC (1786320000)
-  const PLATFORM_BASE_START_SEC = 1786320000;
-
   const candidates: number[] = [];
 
   const addCandidate = (val: any) => {
@@ -304,7 +301,7 @@ export function resolveCanonicalDepositStartTime(
     }
   };
 
-  // 1. Deposits array items
+  // 1. Deposits array items (actual deposit events)
   if (Array.isArray(deposits)) {
     deposits.forEach((d) => {
       if (d) {
@@ -321,10 +318,8 @@ export function resolveCanonicalDepositStartTime(
   if (activeInvestment?.depositTimestamp) addCandidate(activeInvestment.depositTimestamp);
   if (activeInvestment?.activationTimestamp) addCandidate(activeInvestment.activationTimestamp);
 
-  // 3. User account timestamps
+  // 3. User account deposit-specific timestamps
   if (user?.depositTimestamp) addCandidate(user.depositTimestamp);
-  if (user?.createdAt) addCandidate(user.createdAt);
-  if (user?.joinedDate) addCandidate(user.joinedDate);
   if (user?.depositStartTime) addCandidate(user.depositStartTime);
 
   // 4. Stored local anchors in localStorage
@@ -334,24 +329,17 @@ export function resolveCanonicalDepositStartTime(
       if (stored) addCandidate(stored);
     }
     if (cleanEmail) {
-      const storedYield = window.localStorage.getItem(`dollarcraft_yield_${cleanEmail}`);
       const storedDc = window.localStorage.getItem(`dc_dep_start_${cleanEmail}`);
-      if (storedYield) addCandidate(storedYield);
       if (storedDc) addCandidate(storedDc);
     }
   }
 
-  // 5. Default platform contract anchor
-  addCandidate(PLATFORM_BASE_START_SEC);
-  addCandidate(nowSec - (86400 * 5)); // 5 days minimum contract elapsed time
-
   const validCandidates = candidates.filter((c) => c > 0 && c <= nowSec);
-  const minCandidate = validCandidates.length > 0 ? Math.min(...validCandidates) : (nowSec - 86400 * 5);
+  const minCandidate = validCandidates.length > 0 ? Math.min(...validCandidates) : nowSec;
 
   if (typeof window !== 'undefined' && window.localStorage) {
     if (userId) window.localStorage.setItem(`dc_dep_start_${userId}`, String(minCandidate));
     if (cleanEmail) {
-      window.localStorage.setItem(`dollarcraft_yield_${cleanEmail}`, String(minCandidate));
       window.localStorage.setItem(`dc_dep_start_${cleanEmail}`, String(minCandidate));
     }
   }
@@ -653,19 +641,13 @@ export function computeLiveUserAccruedProfit(
 
   const directEarned = parseFloat(String(user.earnedYield || (user as any).baseEarnedYield || '0')) || 0;
   if (directEarned > 0 && directEarned > grossProfit) {
-    grossProfit = directEarned + (ratePerSec * (Math.floor(nowSec) % 60));
+    grossProfit = directEarned;
   }
 
   // Net available profit after subtracting approved/pending withdrawals
-  let netProfit = grossProfit - totalWithdrawn;
+  const netProfit = Math.max(0, grossProfit - totalWithdrawn);
 
-  // CONTINUOUS LIVE ACCRUAL: Any active depositor's earned profit must NEVER be frozen at $0.000000
-  if (netProfit <= 0 && userDeposit > 0) {
-    const liveStreamOffset = ratePerSec * Math.max(1, (Math.floor(nowSec) % 3600) + 1);
-    netProfit = liveStreamOffset;
-  }
-
-  return Math.max(0, netProfit);
+  return netProfit;
 }
 
 export function updateUserProfitAnchor(userKey: string, newProfit: number): void {

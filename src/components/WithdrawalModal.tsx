@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { BigNumber, formatCurrency, formatPrecision, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit } from '../lib/yieldEngine';
+import { BigNumber, formatCurrency, formatPrecision, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit, getPlanRates } from '../lib/yieldEngine';
 import { User, UserDeposit } from '../types';
 import { CinematicButton } from './ui/CinematicButton';
 import html2canvas from 'html2canvas';
@@ -86,28 +86,60 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
       .catch(() => {});
   }, [isOpen, currentUser?.email, currentUser?.id]);
 
+  const monotonicProfitRef = useRef<number>(0);
+  const lastTickTimeRef = useRef<number>(Date.now());
+
   // Real-time synchronization of exact same live accrued profit as Total Earned Profit
   const [liveProfitBalance, setLiveProfitBalance] = useState<number>(() => {
-    return computeLiveUserAccruedProfit(currentUser, deposits, transactions);
+    const initial = typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0
+      ? liveAccruedProfit
+      : computeLiveUserAccruedProfit(currentUser, deposits, transactions);
+    monotonicProfitRef.current = initial;
+    lastTickTimeRef.current = Date.now();
+    return initial;
   });
 
   useEffect(() => {
     if (!isOpen || !currentUser) return;
 
-    const calcLiveProfit = () => {
-      const combinedTx = [...(transactions || []), ...(modalWithdrawals || [])];
-      return computeLiveUserAccruedProfit(currentUser, deposits, combinedTx);
-    };
+    // Synchronize initial baseline from liveAccruedProfit or canonical computation
+    const startVal = typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0
+      ? liveAccruedProfit
+      : computeLiveUserAccruedProfit(currentUser, deposits, [...(transactions || []), ...(modalWithdrawals || [])]);
 
-    setLiveProfitBalance(calcLiveProfit());
+    monotonicProfitRef.current = startVal;
+    setLiveProfitBalance(startVal);
+    lastTickTimeRef.current = Date.now();
+
+    const userDep = Math.max(
+      parseFloat(String(currentUser?.principalBalance || '0')) || 0,
+      typeof currentUser?.totalDeposit === 'number' ? currentUser.totalDeposit : (parseFloat(String(currentUser?.totalDeposit || '0')) || 0),
+      (deposits || []).reduce((sum, d) => sum + (parseFloat(String(d?.principalAmount || '0')) || 0), 0)
+    );
+
+    const rates = getPlanRates(userDep);
+    const mRate = currentUser?.activeInvestment?.monthlyYieldPercent || rates.monthlyYieldPercent;
+    const dailyRatePercent = mRate / 30;
+    const dynamicDailyAmount = userDep * (dailyRatePercent / 100);
+    const dailyRateAmount = parseFloat(String((currentUser as any)?.dailyYieldRate || dynamicDailyAmount)) || dynamicDailyAmount;
+    const ratePerMs = dailyRateAmount / 86400000;
 
     const timer = setInterval(() => {
-      setLiveProfitBalance(calcLiveProfit());
+      const now = Date.now();
+      const dt = Math.max(0, now - lastTickTimeRef.current);
+      lastTickTimeRef.current = now;
+
+      if (userDep > 0) {
+        const nextVal = monotonicProfitRef.current + (ratePerMs * dt);
+        monotonicProfitRef.current = nextVal;
+        setLiveProfitBalance(nextVal);
+      }
     }, 50);
 
     return () => clearInterval(timer);
   }, [
     isOpen,
+    liveAccruedProfit,
     currentUser?.email,
     currentUser?.id,
     currentUser?.principalBalance,
@@ -122,9 +154,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
 
   if (!isOpen) return null;
 
-  const currentAvailableProfit = liveProfitBalance > 0
-    ? liveProfitBalance
-    : (typeof liveAccruedProfit === 'number' && liveAccruedProfit > 0 ? liveAccruedProfit : 0);
+  const currentAvailableProfit = liveProfitBalance;
 
   const maxBalanceBN = new BigNumber(currentAvailableProfit || availableBalance || 0);
 

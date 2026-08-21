@@ -313,7 +313,6 @@ export function resolveCanonicalDepositStartTime(
         addCandidate(d.startTime);
         addCandidate((d as any).depositStartTime);
         addCandidate((d as any).depositTimestamp);
-        addCandidate((d as any).createdAt);
       }
     });
   }
@@ -323,11 +322,9 @@ export function resolveCanonicalDepositStartTime(
   if (activeInvestment?.depositTimestamp) addCandidate(activeInvestment.depositTimestamp);
   if (activeInvestment?.activationTimestamp) addCandidate(activeInvestment.activationTimestamp);
 
-  // 4. User account deposit-specific timestamps & creation date
+  // 4. User account deposit-specific timestamps
   if (user?.depositTimestamp) addCandidate(user.depositTimestamp);
   if (user?.depositStartTime) addCandidate(user.depositStartTime);
-  if (user?.createdAt) addCandidate(user.createdAt);
-  if ((user as any)?.joinedDate) addCandidate((user as any).joinedDate);
 
   // 5. Stored local anchors in localStorage
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -655,7 +652,13 @@ export function computeLiveUserAccruedProfit(
   const minBaseline = userDeposit > 0 ? (ratePerSec * 3600) : 0;
   
   // Gross profit accumulated before deductions
-  const grossProfit = Math.max(calculatedFromStart, directEarned + totalWithdrawn, baseYieldVal + totalWithdrawn, abdulhaMin, minBaseline);
+  let grossProfit = 0;
+  if (directEarned > 0 || baseYieldVal > 0) {
+    const explicitBase = Math.max(directEarned + totalWithdrawn, baseYieldVal + totalWithdrawn);
+    grossProfit = Math.max(explicitBase, abdulhaMin, minBaseline);
+  } else {
+    grossProfit = Math.max(calculatedFromStart, abdulhaMin, minBaseline);
+  }
   
   // Net profit strictly minus all withdrawals
   const netCanonicalBase = Math.max(0, grossProfit - totalWithdrawn);

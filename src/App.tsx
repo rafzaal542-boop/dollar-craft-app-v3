@@ -322,8 +322,7 @@ export default function App() {
             try {
               localWdNum = Math.max(
                 parseFloat(localStorage.getItem(`dc_withdrawn_${uEmailClean}`) || '0'),
-                parseFloat(localStorage.getItem(`dc_withdrawn_${uIdClean}`) || '0'),
-                parseFloat(localStorage.getItem('dc_user_withdrawn') || '0')
+                parseFloat(localStorage.getItem(`dc_withdrawn_${uIdClean}`) || '0')
               );
             } catch (_) {}
             const effWithdrawnBN = BigNumber.max(
@@ -334,7 +333,7 @@ export default function App() {
             const effWithdrawnStr = effWithdrawnBN.toFixed(18);
 
             const calculatedLiveProfit = computeLiveUserAccruedProfit(
-              { ...prevUser, ...d, totalWithdrawn: effWithdrawnStr },
+              { ...prevUser, ...d },
               deposits,
               transactions
             );
@@ -892,12 +891,14 @@ export default function App() {
           const incomingYieldBN = new BigNumber(data.earnedYield !== undefined ? data.earnedYield : '0');
           const prevWithdrawn = new BigNumber(prev.totalWithdrawn || '0');
           const incomingWithdrawn = new BigNumber(data.totalWithdrawn !== undefined ? data.totalWithdrawn : prevWithdrawn);
+          const finalWithdrawnBN = BigNumber.max(prevWithdrawn, incomingWithdrawn);
 
+          // If withdrawal occurred (incomingWithdrawn > prevWithdrawn), yield must drop to post-withdrawal yield
           let finalYieldBN = incomingYieldBN;
-          if (incomingWithdrawn.gte(prevWithdrawn)) {
+          if (incomingWithdrawn.gt(prevWithdrawn)) {
             finalYieldBN = incomingYieldBN;
           } else {
-            finalYieldBN = prevYieldBN;
+            finalYieldBN = BigNumber.max(prevYieldBN, incomingYieldBN);
           }
 
           const finalBalNum = finalBalBN.toNumber();
@@ -905,14 +906,19 @@ export default function App() {
           const finalTotalDep = Math.max(finalBalNum, Number(prev.totalDeposit || 0));
           const finalTotalBal = Math.max(finalTotalDep + finalYieldNum, Number(prev.totalBalance || 0));
 
-          const nowSec = Math.floor(Date.now() / 1000);
+          const preservedDepositStartTime = prev.depositStartTime && Number(prev.depositStartTime) > 0
+            ? Number(prev.depositStartTime)
+            : (data.depositStartTime && Number(data.depositStartTime) > 0 ? Number(data.depositStartTime) : Math.floor(Date.now() / 1000));
+
           return {
             ...prev,
             principalBalance: finalBalBN.toFixed(18),
             earnedYield: finalYieldBN.toFixed(18),
+            totalWithdrawn: finalWithdrawnBN.toFixed(18),
+            withdrawnTotal: finalWithdrawnBN.toFixed(18),
             totalDeposit: finalTotalDep,
             totalBalance: finalTotalBal,
-            depositStartTime: nowSec,
+            depositStartTime: preservedDepositStartTime,
             baseEarnedYield: finalYieldBN.toFixed(18)
           };
         });
@@ -1092,16 +1098,16 @@ export default function App() {
       const uEmail = (user.email || '').toLowerCase().trim();
       const uId = (user.id || '').trim();
       if (uEmail) {
-        updateUserProfitAnchor(uEmail, newNetProfit, nowSec);
+        updateUserProfitAnchor(uEmail, newNetProfit, Date.now(), true);
         localStorage.setItem(`dc_withdrawn_${uEmail}`, newWithdrawnNum.toString());
         localStorage.setItem('dc_user_withdrawn', newWithdrawnNum.toString());
         localStorage.setItem(`dollarcraft_accumulated_profit_${uEmail}`, newYieldStr);
       }
       if (uId) {
-        updateUserProfitAnchor(uId, newNetProfit, nowSec);
+        updateUserProfitAnchor(uId, newNetProfit, Date.now(), true);
         localStorage.setItem(`dollarcraft_accumulated_profit_${uId}`, newYieldStr);
       }
-      updateUserProfitAnchor('user', newNetProfit, nowSec);
+      updateUserProfitAnchor('user', newNetProfit, Date.now(), true);
 
       const userKeys = ['dollar_craft_users', 'dollar_craft_registered_users', 'dc_registered_users', 'registered_users'];
       userKeys.forEach((key) => {

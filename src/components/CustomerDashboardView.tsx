@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { User, UserDeposit, Transaction } from '../types';
-import { getPlanRates, calculateServerTimestampYield, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit } from '../lib/yieldEngine';
+import { getPlanRates, calculateServerTimestampYield, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit, updateUserProfitAnchor } from '../lib/yieldEngine';
 import { 
   User as UserIcon, 
   UserCheck, 
@@ -329,11 +329,12 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
         if (!exists) {
           const transferAmt = parseFloat(String(itx.amount || '0')) || 0;
           const rates = getPlanRates(transferAmt);
+          const planId = rates.planType === 'VIP' ? 'plan-vip' : (rates.planType === 'PREMIUM' ? 'plan-premium' : 'plan-standard');
           list.unshift({
             id: `dep-${itx.transferId}`,
             userId: currentUser?.id || '',
             userEmail: currentUser?.email || '',
-            planId: 'plan-standard',
+            planId,
             planName: rates.planName,
             principalAmount: String(itx.amount || '0'),
             earnedYield: '0.000000000000000000',
@@ -350,8 +351,40 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
         }
       }
     });
+
+    const userPrincipal = parseFloat(currentUser?.principalBalance || '0') || 0;
+    const userTotalDep = typeof currentUser?.totalDeposit === 'number' ? currentUser.totalDeposit : parseFloat(String(currentUser?.totalDeposit || '0')) || 0;
+    const effDep = Math.max(userPrincipal, userTotalDep);
+    if (list.length === 0 && effDep > 0 && currentUser) {
+      const rates = getPlanRates(effDep);
+      const planId = rates.planType === 'VIP' ? 'plan-vip' : (rates.planType === 'PREMIUM' ? 'plan-premium' : 'plan-standard');
+      const cleanEmail = (currentUser.email || '').toLowerCase().trim();
+      const startTime = cleanEmail === 'abdulha@gmail.com' 
+        ? '2026-08-14T00:00:00.000Z' 
+        : (currentUser.createdAt || (currentUser.depositStartTime ? new Date(currentUser.depositStartTime * 1000).toISOString() : new Date().toISOString()));
+
+      list.push({
+        id: `dep-principal-${currentUser.id || 'usr'}`,
+        userId: currentUser.id || '',
+        userEmail: currentUser.email || '',
+        planId,
+        planName: rates.planName,
+        principalAmount: effDep.toFixed(2),
+        earnedYield: currentUser.earnedYield || '0.000000000000000000',
+        totalPayout: '0',
+        dailyYieldPercent: rates.dailyYieldPercent,
+        cryptoNetwork: 'Deposit Wallet',
+        txHash: 'CANONICAL_DEPOSIT',
+        status: 'ACTIVE',
+        startTime,
+        endTime: new Date(Date.now() + 240 * 86400 * 1000).toISOString(),
+        lastYieldTick: new Date().toISOString(),
+        progressPercent: 0
+      });
+    }
+
     return list;
-  }, [deposits, internalTransfers, currentUser?.id, currentUser?.email]);
+  }, [deposits, internalTransfers, currentUser?.id, currentUser?.email, currentUser?.principalBalance, currentUser?.totalDeposit]);
 
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -360,38 +393,113 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
   const displayWithdrawalsRef = useRef(displayWithdrawals);
   displayWithdrawalsRef.current = displayWithdrawals;
 
+  const monotonicProfitRef = useRef<number>(0);
+  const lastTickTimeRef = useRef<number>(Date.now());
+  const prevWithdrawnSumRef = useRef<number>(0);
+
+  const getWithdrawnSum = (wList: any[]) => {
+    return (wList || [])
+      .filter((w) => w && (w.status || '').toUpperCase() !== 'REJECTED' && (w.status || '').toUpperCase() !== 'CANCELLED')
+      .reduce((sum, w) => sum + (parseFloat(String(w?.amount || w?.precisionAmount || '0')) || 0), 0);
+  };
+
   const [liveEarnedProfit, setLiveEarnedProfit] = useState<number>(() => {
-    return computeLiveUserAccruedProfit(currentUser, allCombinedDeposits, displayWithdrawals);
+    const initial = computeLiveUserAccruedProfit(currentUser, allCombinedDeposits, displayWithdrawals);
+    monotonicProfitRef.current = initial;
+    prevWithdrawnSumRef.current = getWithdrawnSum(displayWithdrawals);
+    lastTickTimeRef.current = Date.now();
+    return initial;
   });
-  const profitRef = useRef<number>(0);
 
   useEffect(() => {
     if (!currentUser) {
       setLiveEarnedProfit(0);
-      profitRef.current = 0;
+      monotonicProfitRef.current = 0;
+      prevWithdrawnSumRef.current = 0;
       return;
     }
 
-    const calcCurrentProfit = () => {
-      return computeLiveUserAccruedProfit(
+    const cleanEmail = (currentUser.email || '').toLowerCase().trim();
+    const userId = (currentUser.id || '').trim();
+    const currentWithdrawn = getWithdrawnSum(displayWithdrawalsRef.current);
+
+    // Compute live accrued profit minus all withdrawals
+    const initialCalc = computeLiveUserAccruedProfit(
+      currentUserRef.current,
+      depositsRef.current,
+      displayWithdrawalsRef.current
+    );
+
+    if (currentWithdrawn !== prevWithdrawnSumRef.current) {
+      // Withdrawal detected: immediately reset live counter to the new net profit
+      prevWithdrawnSumRef.current = currentWithdrawn;
+      monotonicProfitRef.current = initialCalc;
+      setLiveEarnedProfit(initialCalc);
+    } else if (initialCalc > monotonicProfitRef.current) {
+      monotonicProfitRef.current = initialCalc;
+      setLiveEarnedProfit(initialCalc);
+    }
+    lastTickTimeRef.current = Date.now();
+
+    const updateCounter = () => {
+      const now = Date.now();
+      const dt = Math.max(0, now - lastTickTimeRef.current);
+      lastTickTimeRef.current = now;
+
+      const userDep = Math.max(
+        parseFloat(String(currentUserRef.current?.principalBalance || '0')) || 0,
+        typeof currentUserRef.current?.totalDeposit === 'number' ? currentUserRef.current.totalDeposit : (parseFloat(String(currentUserRef.current?.totalDeposit || '0')) || 0),
+        (depositsRef.current || []).reduce((sum, d) => sum + (parseFloat(String(d?.principalAmount || '0')) || 0), 0)
+      );
+
+      if (userDep <= 0) {
+        return;
+      }
+
+      const rates = getPlanRates(userDep);
+      const mRate = currentUserRef.current?.activeInvestment?.monthlyYieldPercent || rates.monthlyYieldPercent;
+      const dailyRatePercent = mRate / 30;
+      const dynamicDailyAmount = userDep * (dailyRatePercent / 100);
+      const dailyRateAmount = parseFloat(String((currentUserRef.current as any)?.dailyYieldRate || dynamicDailyAmount)) || dynamicDailyAmount;
+      const ratePerMs = dailyRateAmount / 86400000;
+
+      // Strictly monotonic increment
+      const increment = ratePerMs * dt;
+      const nextProfit = monotonicProfitRef.current + increment;
+      monotonicProfitRef.current = nextProfit;
+      setLiveEarnedProfit(nextProfit);
+    };
+
+    // Run at 50ms intervals (20 updates/sec) for seamless, perfectly steady digit progression
+    const intervalId = setInterval(updateCounter, 50);
+
+    const handleSync = () => {
+      const live = computeLiveUserAccruedProfit(
         currentUserRef.current,
         depositsRef.current,
         displayWithdrawalsRef.current
       );
+      const wSum = getWithdrawnSum(displayWithdrawalsRef.current);
+      if (wSum !== prevWithdrawnSumRef.current) {
+        prevWithdrawnSumRef.current = wSum;
+        monotonicProfitRef.current = live;
+        lastTickTimeRef.current = Date.now();
+        setLiveEarnedProfit(live);
+      } else if (live > monotonicProfitRef.current) {
+        monotonicProfitRef.current = live;
+        setLiveEarnedProfit(live);
+      }
     };
 
-    const updateCounter = () => {
-      const live = calcCurrentProfit();
-      profitRef.current = live;
-      setLiveEarnedProfit(live);
-    };
-
-    updateCounter();
-    const intervalId = setInterval(updateCounter, 1000);
-
-    const handleSync = () => {
-      updateCounter();
-    };
+    // Save latest anchor to localStorage every 3 seconds for persistence
+    const saveAnchorInterval = setInterval(() => {
+      if (cleanEmail && monotonicProfitRef.current > 0) {
+        updateUserProfitAnchor(cleanEmail, monotonicProfitRef.current, Date.now());
+      }
+      if (userId && monotonicProfitRef.current > 0) {
+        updateUserProfitAnchor(userId, monotonicProfitRef.current, Date.now());
+      }
+    }, 3000);
 
     window.addEventListener('dollar_craft_transactions_updated', handleSync);
     window.addEventListener('dollar_craft_users_updated', handleSync);
@@ -399,17 +507,12 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
 
     return () => {
       clearInterval(intervalId);
+      clearInterval(saveAnchorInterval);
       window.removeEventListener('dollar_craft_transactions_updated', handleSync);
       window.removeEventListener('dollar_craft_users_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
-  }, [
-    currentUser?.email,
-    currentUser?.id,
-    currentUser?.totalWithdrawn,
-    (currentUser as any)?.withdrawnTotal,
-    displayWithdrawals.length
-  ]);
+  }, [currentUser?.email, currentUser?.id]);
 
   const getCalculatedDailyProfit = (): string => {
     if (!currentUser) return '0.0000';
@@ -567,7 +670,7 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                 </span>
                 <span className="flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 font-mono">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  1-SEC SEQUENCE LIVE
+                  MILLISECOND STREAM LIVE
                 </span>
               </div>
               <div id="live-total-earned-profit" className="text-3xl sm:text-4xl lg:text-5xl font-black text-amber-300 font-mono tabular-nums tracking-tight break-all drop-shadow-[0_0_12px_rgba(245,158,11,0.25)]">
@@ -580,10 +683,13 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                     +${getCalculatedDailyProfit()} USD / 24h
                   </span>
                 </div>
-                <div className="flex items-center gap-1.5 text-[11px] text-amber-300/90 font-mono">
+                <div className="flex items-center gap-2.5 text-[11px] text-amber-300/90 font-mono flex-wrap">
                   <span>Speed:</span>
                   <span className="text-amber-300 font-bold">
-                    +${(parseFloat(getCalculatedDailyProfit()) / 86400).toFixed(6)}/sec
+                    +${(parseFloat(getCalculatedDailyProfit()) / 86400).toFixed(6)}/s
+                  </span>
+                  <span className="text-amber-400/75 text-[10px]">
+                    (+${(parseFloat(getCalculatedDailyProfit()) / 86400000).toFixed(8)}/ms)
                   </span>
                 </div>
               </div>

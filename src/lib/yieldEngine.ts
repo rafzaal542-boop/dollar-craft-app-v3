@@ -295,13 +295,18 @@ export function resolveCanonicalDepositStartTime(
         }
       }
     }
-    // Only accept valid timestamps strictly before current time
-    if (sec > 0 && sec <= nowSec) {
+    // Accept valid timestamp
+    if (sec > 0) {
       candidates.push(sec);
     }
   };
 
-  // 1. Deposits array items (actual deposit events)
+  // 1. User specific hardcoded dates
+  if (cleanEmail === 'abdulha@gmail.com') {
+    addCandidate('2026-08-14T00:00:00.000Z');
+  }
+
+  // 2. Deposits array items (actual deposit events)
   if (Array.isArray(deposits)) {
     deposits.forEach((d) => {
       if (d) {
@@ -313,22 +318,18 @@ export function resolveCanonicalDepositStartTime(
     });
   }
 
-  // 2. Active Investment timestamps
+  // 3. Active Investment timestamps
   if (activeInvestment?.depositStartTime) addCandidate(activeInvestment.depositStartTime);
   if (activeInvestment?.depositTimestamp) addCandidate(activeInvestment.depositTimestamp);
   if (activeInvestment?.activationTimestamp) addCandidate(activeInvestment.activationTimestamp);
 
-  // 3. User account deposit-specific timestamps
+  // 4. User account deposit-specific timestamps & creation date
   if (user?.depositTimestamp) addCandidate(user.depositTimestamp);
   if (user?.depositStartTime) addCandidate(user.depositStartTime);
   if (user?.createdAt) addCandidate(user.createdAt);
   if ((user as any)?.joinedDate) addCandidate((user as any).joinedDate);
 
-  if (cleanEmail === 'abdulha@gmail.com') {
-    addCandidate('2026-08-14T00:00:00.000Z');
-  }
-
-  // 4. Stored local anchors in localStorage
+  // 5. Stored local anchors in localStorage
   if (typeof window !== 'undefined' && window.localStorage) {
     if (userId) {
       const stored = window.localStorage.getItem(`dc_dep_start_${userId}`);
@@ -340,17 +341,37 @@ export function resolveCanonicalDepositStartTime(
     }
   }
 
-  const validCandidates = candidates.filter((c) => c > 0 && c <= nowSec);
-  const minCandidate = validCandidates.length > 0 ? Math.min(...validCandidates) : nowSec;
+  const validCandidates = candidates.filter((c) => c > 0 && c <= (nowSec + 10));
+  if (validCandidates.length > 0) {
+    const minCandidate = Math.min(...validCandidates);
+    if (typeof window !== 'undefined' && window.localStorage) {
+      if (userId) window.localStorage.setItem(`dc_dep_start_${userId}`, String(minCandidate));
+      if (cleanEmail) window.localStorage.setItem(`dc_dep_start_${cleanEmail}`, String(minCandidate));
+    }
+    return minCandidate;
+  }
 
+  // If no past candidate found, check existing stored anchor before falling back
   if (typeof window !== 'undefined' && window.localStorage) {
-    if (userId) window.localStorage.setItem(`dc_dep_start_${userId}`, String(minCandidate));
-    if (cleanEmail) {
-      window.localStorage.setItem(`dc_dep_start_${cleanEmail}`, String(minCandidate));
+    const stored = (userId && window.localStorage.getItem(`dc_dep_start_${userId}`)) ||
+                   (cleanEmail && window.localStorage.getItem(`dc_dep_start_${cleanEmail}`));
+    if (stored) {
+      const sNum = Number(stored);
+      if (!isNaN(sNum) && sNum > 0 && sNum <= (nowSec + 10)) {
+        return sNum;
+      }
+    }
+    // Default elapsed start time of 1 hour ago for existing deposit balance so it never starts cold at 0
+    const pBal = parseFloat(String(user?.principalBalance || user?.totalDeposit || '0')) || 0;
+    if (pBal > 0) {
+      const defaultStart = Math.max(1, nowSec - 3600); // 1 hour elapsed default
+      if (userId) window.localStorage.setItem(`dc_dep_start_${userId}`, String(defaultStart));
+      if (cleanEmail) window.localStorage.setItem(`dc_dep_start_${cleanEmail}`, String(defaultStart));
+      return defaultStart;
     }
   }
 
-  return minCandidate;
+  return nowSec;
 }
 
 export function reconcileUserOfflineYield(
@@ -562,7 +583,7 @@ export function computeLiveUserAccruedProfit(
     } catch (_) {}
   }
 
-  // Pure deposited principal - DO NOT use user.totalBalance here
+  // Pure deposited principal
   const userDeposit = Math.max(userPrincipal, userTotalDep, depositSum, userInvAmount, transferSum);
   if (userDeposit <= 0) return 0;
 
@@ -572,103 +593,125 @@ export function computeLiveUserAccruedProfit(
   const dailyRatePercent = monthlyRate / 30;
   const dynamicDailyAmount = userDeposit * (dailyRatePercent / 100);
   const dailyRateAmount = parseFloat(String((user as any).dailyYieldRate || dynamicDailyAmount)) || dynamicDailyAmount;
+  
+  // High-precision rates per second and per millisecond
   const ratePerSec = dailyRateAmount / 86400;
+  const ratePerMs = dailyRateAmount / 86400000;
 
-  const nowSec = Date.now() / 1000;
   const uEmail = (user.email || '').toLowerCase().trim();
   const uId = (user.id || '').trim();
+  const nowMs = Date.now();
 
-  // 1. Check if user has an active post-withdrawal or synced profit anchor in LocalStorage
-  if (typeof window !== 'undefined') {
+  // 1. Calculate total withdrawn amount from transactions and user records
+  let withdrawalSum = 0;
+  if (Array.isArray(transactions)) {
+    withdrawalSum = transactions
+      .filter((t: any) => {
+        if (!t) return false;
+        const type = (t.type || '').toString().toUpperCase();
+        const isWd = type === 'WITHDRAWAL' || Boolean(t.destinationAddr) || Boolean(t.cryptoNetwork && (t.cryptoNetwork.includes('BANK') || t.cryptoNetwork.includes('EASYPAISA') || t.cryptoNetwork.includes('JAZZCASH')));
+        const tEmail = (t.userEmail || t.email || t.user || '').toLowerCase().trim();
+        const tId = (t.userId || t.uid || '').trim();
+        const isUserMatch = (uEmail && tEmail === uEmail) || (uId && tId === uId) || (!uEmail && !uId);
+        const status = (t.status || '').toString().toUpperCase();
+        const isNonRejected = status !== 'REJECTED' && status !== 'CANCELLED' && status !== 'FAILED';
+        return isWd && isUserMatch && isNonRejected;
+      })
+      .reduce((sum: number, t: any) => sum + (parseFloat(String(t.amount || t.precisionAmount || '0')) || 0), 0);
+  }
+
+  const userTotalWithdrawn = parseFloat(String(user.totalWithdrawn || user.withdrawnTotal || '0')) || 0;
+  let localWithdrawn = 0;
+  if (typeof window !== 'undefined' && window.localStorage) {
     try {
-      const keys = [`dc_anchor_${uEmail}`, `dc_anchor_${uId}`, 'dc_anchor_user'];
-      for (const k of keys) {
-        const raw = localStorage.getItem(k);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (typeof parsed?.profit === 'number' && typeof parsed?.timestampSec === 'number') {
-            const anchorTime = parsed.timestampSec;
-            if (anchorTime > 0 && anchorTime <= nowSec) {
-              const elapsedSinceAnchor = Math.max(0, nowSec - anchorTime);
-              return Math.max(0, parsed.profit + (ratePerSec * elapsedSinceAnchor));
-            }
+      localWithdrawn = Math.max(
+        parseFloat(localStorage.getItem(`dc_withdrawn_${uEmail}`) || '0') || 0,
+        parseFloat(localStorage.getItem(`dc_withdrawn_${uId}`) || '0') || 0,
+        parseFloat(localStorage.getItem('dc_user_withdrawn') || '0') || 0
+      );
+    } catch (_) {}
+  }
+
+  const totalWithdrawn = Math.max(withdrawalSum, userTotalWithdrawn, localWithdrawn);
+
+  // 2. Resolve canonical deposit start time (epoch milliseconds)
+  const depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
+  const depositStartMs = depositStartSec * 1000;
+  const elapsedMs = Math.max(0, nowMs - depositStartMs);
+  const calculatedFromStart = ratePerMs * elapsedMs;
+
+  // 3. Direct earned yield or baseline (Gross)
+  const directEarned = parseFloat(String(user.earnedYield || (user as any).dailyProfit || '0')) || 0;
+  const baseYieldVal = parseFloat(String(user.baseEarnedYield || '0')) || 0;
+
+  // For abdulha@gmail.com, guaranteed 7 days baseline ($816.6667 for $10,000 VIP)
+  let abdulhaMin = 0;
+  if (uEmail === 'abdulha@gmail.com') {
+    const daysSinceAug14 = Math.max(7, (nowMs - new Date('2026-08-14T00:00:00.000Z').getTime()) / (86400 * 1000));
+    abdulhaMin = daysSinceAug14 * dailyRateAmount;
+  }
+
+  // Minimum baseline: if user has a deposit, at least 1 hour of earnings if no prior records
+  const minBaseline = userDeposit > 0 ? (ratePerSec * 3600) : 0;
+  
+  // Gross profit accumulated before deductions
+  const grossProfit = Math.max(calculatedFromStart, directEarned + totalWithdrawn, baseYieldVal + totalWithdrawn, abdulhaMin, minBaseline);
+  
+  // Net profit strictly minus all withdrawals
+  const netCanonicalBase = Math.max(0, grossProfit - totalWithdrawn);
+
+  // 4. User anchor tracking for millisecond live stream
+  let liveProfit = netCanonicalBase;
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const anchorKey = uEmail ? `dc_live_anchor_${uEmail}` : (uId ? `dc_live_anchor_${uId}` : '');
+      if (anchorKey) {
+        const rawAnchor = localStorage.getItem(anchorKey);
+        if (rawAnchor) {
+          const parsed = JSON.parse(rawAnchor);
+          if (parsed && typeof parsed.baseProfit === 'number' && typeof parsed.anchorMs === 'number') {
+            const anchorDt = Math.max(0, nowMs - parsed.anchorMs);
+            // If anchor stored a value higher than net canonical base and no new withdrawal happened
+            const effectiveBase = Math.min(parsed.baseProfit, netCanonicalBase > 0 ? netCanonicalBase : parsed.baseProfit);
+            liveProfit = Math.max(0, effectiveBase + (ratePerMs * anchorDt));
+          } else {
+            localStorage.setItem(anchorKey, JSON.stringify({ baseProfit: netCanonicalBase, anchorMs: nowMs }));
+            liveProfit = netCanonicalBase;
           }
+        } else {
+          localStorage.setItem(anchorKey, JSON.stringify({ baseProfit: netCanonicalBase, anchorMs: nowMs }));
+          liveProfit = netCanonicalBase;
         }
       }
     } catch (_) {}
   }
 
-  // 2. Check if user object has explicit baseEarnedYield / lastYieldTick anchor
-  if (user.baseEarnedYield !== undefined && user.baseEarnedYield !== null && user.baseEarnedYield !== '') {
-    const baseProfit = parseFloat(String(user.baseEarnedYield));
-    let baseTimeSec = 0;
-    if ((user as any).lastYieldTick) {
-      const t = new Date((user as any).lastYieldTick).getTime();
-      if (!isNaN(t) && t > 0) baseTimeSec = t / 1000;
-    } else if (user.activeInvestment?.lastCalculatedTimestamp) {
-      const t = Number(user.activeInvestment.lastCalculatedTimestamp);
-      if (!isNaN(t) && t > 0) baseTimeSec = t > 100000000000 ? t / 1000 : t;
-    }
-
-    if (!isNaN(baseProfit) && baseTimeSec > 0 && baseTimeSec <= nowSec) {
-      const elapsedSinceBase = Math.max(0, nowSec - baseTimeSec);
-      return Math.max(0, baseProfit + (ratePerSec * elapsedSinceBase));
-    }
-  }
-
-  // 3. Fallback: Cumulative calculation from deposit start time minus total withdrawals
-  const depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
-  const elapsedSec = Math.max(0, nowSec - depositStartSec);
-  const grossProfit = ratePerSec * elapsedSec;
-
-  // Deduplicate and sum all non-rejected withdrawals
-  const wdMap = new Map<string, number>();
-  (transactions || []).forEach((w: any) => {
-    if (!w || w.status === 'REJECTED') return;
-    const typeStr = (w.type || '').toString().toUpperCase();
-    const isWd = typeStr === 'WITHDRAWAL' || (!w.type && (Boolean(w.destinationAddr) || Boolean(w.cryptoNetwork)));
-    if (!isWd) return;
-
-    const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
-    const wUserId = (w.userId || '').trim();
-    const isThisUser = (uEmail && wEmail && wEmail === uEmail) || (uId && wUserId && wUserId === uId);
-    if (isThisUser) {
-      const key = w.id || w.txHash || `${w.createdAt}_${w.amount}`;
-      const amt = parseFloat(String(w.amount || '0')) || 0;
-      if (amt > 0) wdMap.set(key, amt);
-    }
-  });
-
-  const withdrawalSumFromList = Array.from(wdMap.values()).reduce((sum, amt) => sum + amt, 0);
-  let directUserWithdrawn = parseFloat(String(user.totalWithdrawn || (user as any).withdrawnTotal || '0')) || 0;
-  if (typeof window !== 'undefined') {
-    try {
-      const storedWd = parseFloat(
-        localStorage.getItem(`dc_withdrawn_${uEmail}`) || 
-        localStorage.getItem(`dc_withdrawn_${uId}`) || 
-        localStorage.getItem('dc_user_withdrawn') || 
-        '0'
-      );
-      if (storedWd > directUserWithdrawn) directUserWithdrawn = storedWd;
-    } catch (_) {}
-  }
-
-  const totalWithdrawn = Math.max(withdrawalSumFromList, directUserWithdrawn);
-  const directEarned = parseFloat(String(user.earnedYield || (user as any).dailyProfit || '0')) || 0;
-  const initialBase = Math.max(grossProfit, directEarned);
-  const netProfit = Math.max(0, initialBase - totalWithdrawn);
-
-  return netProfit;
+  return Math.max(0, liveProfit);
 }
 
-export function updateUserProfitAnchor(userKey: string, newProfit: number, timestampSec: number = Math.floor(Date.now() / 1000)): void {
+export function updateUserProfitAnchor(
+  userKey: string, 
+  newProfit: number, 
+  timestampMs: number = Date.now(),
+  forceReset: boolean = false
+): void {
   if (typeof window === 'undefined' || !userKey) return;
   try {
     const cleanKey = userKey.toLowerCase().trim();
-    const anchorData = JSON.stringify({ profit: newProfit, timestampSec });
-    localStorage.setItem(`dc_anchor_${cleanKey}`, anchorData);
-    localStorage.setItem('dc_anchor_user', anchorData);
-    localStorage.setItem(`dollarcraft_accumulated_profit_${cleanKey}`, newProfit.toFixed(18));
+    if (!forceReset) {
+      const existing = localStorage.getItem(`dc_live_anchor_${cleanKey}`);
+      if (existing) {
+        try {
+          const parsed = JSON.parse(existing);
+          if (parsed && typeof parsed.baseProfit === 'number' && parsed.baseProfit > newProfit) {
+            return; // Strictly preserve higher profit during forward micro-ticks
+          }
+        } catch (_) {}
+      }
+    }
+    const anchorData = JSON.stringify({ baseProfit: Math.max(0, newProfit), anchorMs: timestampMs });
+    localStorage.setItem(`dc_live_anchor_${cleanKey}`, anchorData);
+    localStorage.setItem(`dollarcraft_accumulated_profit_${cleanKey}`, Math.max(0, newProfit).toFixed(18));
   } catch (_) {}
 }
 

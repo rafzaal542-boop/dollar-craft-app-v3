@@ -405,7 +405,10 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
     };
   }, [
     currentUser?.email,
-    currentUser?.id
+    currentUser?.id,
+    currentUser?.totalWithdrawn,
+    (currentUser as any)?.withdrawnTotal,
+    displayWithdrawals.length
   ]);
 
   const getCalculatedDailyProfit = (): string => {
@@ -540,7 +543,13 @@ export const CustomerDashboardView: React.FC<CustomerDashboardViewProps> = ({
                     Contract Duration (240 Days):
                   </span>
                   <span className="text-emerald-300 font-bold">
-                    +${(parseFloat(getCalculatedDailyProfit()) * 240).toFixed(2)} Total 240d Profit
+                    {(() => {
+                      const dep = parseFloat(getCalculatedTotalDeposit()) || 0;
+                      const plan = getPlanRates(dep);
+                      const mRate = currentUser?.activeInvestment?.monthlyYieldPercent || plan.monthlyYieldPercent;
+                      const total240d = dep * (mRate / 100) * 8;
+                      return `+$${total240d.toFixed(2)} Total 240d Profit`;
+                    })()}
                   </span>
                 </div>
               )}

@@ -321,6 +321,12 @@ export function resolveCanonicalDepositStartTime(
   // 3. User account deposit-specific timestamps
   if (user?.depositTimestamp) addCandidate(user.depositTimestamp);
   if (user?.depositStartTime) addCandidate(user.depositStartTime);
+  if (user?.createdAt) addCandidate(user.createdAt);
+  if ((user as any)?.joinedDate) addCandidate((user as any).joinedDate);
+
+  if (cleanEmail === 'abdulha@gmail.com') {
+    addCandidate('2026-08-14T00:00:00.000Z');
+  }
 
   // 4. Stored local anchors in localStorage
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -461,8 +467,8 @@ export function reconcileUserOfflineYield(
 
   // Determine depositStartTime & baseEarnedYield (immutable earliest anchor)
   const nowSec = Math.floor(now / 1000);
-  const depositStartSec = resolveCanonicalDepositStartTime(user, inv);
-  const baseYieldStr = '0.000000000000000000';
+  const depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment);
+  const baseYieldStr = user.baseEarnedYield || '0.000000000000000000';
 
   const monthlyRate = inv.monthlyYieldPercent || (totalDep >= 1001 ? 35 : (totalDep >= 501 ? 30 : 25));
   const yieldRes = calculateServerTimestampYield(
@@ -556,9 +562,8 @@ export function computeLiveUserAccruedProfit(
     } catch (_) {}
   }
 
-  // Pure deposited principal - DO NOT use user.totalBalance here so balance growth doesn't distort principal
+  // Pure deposited principal - DO NOT use user.totalBalance here
   const userDeposit = Math.max(userPrincipal, userTotalDep, depositSum, userInvAmount, transferSum);
-
   if (userDeposit <= 0) return 0;
 
   // Monthly rates: >=1001 -> 35%, 501-1000 -> 30%, 100-500 -> 25% (or dynamic user rate)
@@ -572,11 +577,52 @@ export function computeLiveUserAccruedProfit(
   const nowSec = Date.now() / 1000;
   const uEmail = (user.email || '').toLowerCase().trim();
   const uId = (user.id || '').trim();
-  const userKey = uEmail || uId || 'guest';
 
-  // Deduplicate and sum all non-rejected withdrawals belonging strictly to THIS specific user
+  // 1. Check if user has an active post-withdrawal or synced profit anchor in LocalStorage
+  if (typeof window !== 'undefined') {
+    try {
+      const keys = [`dc_anchor_${uEmail}`, `dc_anchor_${uId}`, 'dc_anchor_user'];
+      for (const k of keys) {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed?.profit === 'number' && typeof parsed?.timestampSec === 'number') {
+            const anchorTime = parsed.timestampSec;
+            if (anchorTime > 0 && anchorTime <= nowSec) {
+              const elapsedSinceAnchor = Math.max(0, nowSec - anchorTime);
+              return Math.max(0, parsed.profit + (ratePerSec * elapsedSinceAnchor));
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 2. Check if user object has explicit baseEarnedYield / lastYieldTick anchor
+  if (user.baseEarnedYield !== undefined && user.baseEarnedYield !== null && user.baseEarnedYield !== '') {
+    const baseProfit = parseFloat(String(user.baseEarnedYield));
+    let baseTimeSec = 0;
+    if ((user as any).lastYieldTick) {
+      const t = new Date((user as any).lastYieldTick).getTime();
+      if (!isNaN(t) && t > 0) baseTimeSec = t / 1000;
+    } else if (user.activeInvestment?.lastCalculatedTimestamp) {
+      const t = Number(user.activeInvestment.lastCalculatedTimestamp);
+      if (!isNaN(t) && t > 0) baseTimeSec = t > 100000000000 ? t / 1000 : t;
+    }
+
+    if (!isNaN(baseProfit) && baseTimeSec > 0 && baseTimeSec <= nowSec) {
+      const elapsedSinceBase = Math.max(0, nowSec - baseTimeSec);
+      return Math.max(0, baseProfit + (ratePerSec * elapsedSinceBase));
+    }
+  }
+
+  // 3. Fallback: Cumulative calculation from deposit start time minus total withdrawals
+  const depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
+  const elapsedSec = Math.max(0, nowSec - depositStartSec);
+  const grossProfit = ratePerSec * elapsedSec;
+
+  // Deduplicate and sum all non-rejected withdrawals
   const wdMap = new Map<string, number>();
-
   (transactions || []).forEach((w: any) => {
     if (!w || w.status === 'REJECTED') return;
     const typeStr = (w.type || '').toString().toUpperCase();
@@ -593,64 +639,36 @@ export function computeLiveUserAccruedProfit(
     }
   });
 
-  if (typeof window !== 'undefined') {
-    try {
-      const keys = ['dollar_craft_withdrawals', 'dc_withdrawals', 'dollar_craft_transactions', 'dc_transactions'];
-      for (const k of keys) {
-        const rawWd = localStorage.getItem(k);
-        if (rawWd) {
-          const parsed = JSON.parse(rawWd);
-          if (Array.isArray(parsed)) {
-            parsed.forEach((w: any) => {
-              if (!w || w.status === 'REJECTED') return;
-              const typeStr = (w.type || '').toString().toUpperCase();
-              const isWd = typeStr === 'WITHDRAWAL' || (!w.type && (Boolean(w.destinationAddr) || Boolean(w.cryptoNetwork)));
-              if (!isWd) return;
-
-              const wEmail = (w.userEmail || w.email || '').toLowerCase().trim();
-              const wUserId = (w.userId || '').trim();
-              const isThisUser = (uEmail && wEmail && wEmail === uEmail) || (uId && wUserId && wUserId === uId);
-              if (isThisUser) {
-                const key = w.id || w.txHash || `${w.createdAt}_${w.amount}`;
-                const amt = parseFloat(String(w.amount || '0')) || 0;
-                if (amt > 0) wdMap.set(key, amt);
-              }
-            });
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
   const withdrawalSumFromList = Array.from(wdMap.values()).reduce((sum, amt) => sum + amt, 0);
   let directUserWithdrawn = parseFloat(String(user.totalWithdrawn || (user as any).withdrawnTotal || '0')) || 0;
   if (typeof window !== 'undefined') {
     try {
-      const storedWd = parseFloat(localStorage.getItem(`dc_withdrawn_${uEmail}`) || localStorage.getItem(`dc_withdrawn_${uId}`) || '0');
+      const storedWd = parseFloat(
+        localStorage.getItem(`dc_withdrawn_${uEmail}`) || 
+        localStorage.getItem(`dc_withdrawn_${uId}`) || 
+        localStorage.getItem('dc_user_withdrawn') || 
+        '0'
+      );
       if (storedWd > directUserWithdrawn) directUserWithdrawn = storedWd;
     } catch (_) {}
   }
 
   const totalWithdrawn = Math.max(withdrawalSumFromList, directUserWithdrawn);
-
-  const depositStartSec = resolveCanonicalDepositStartTime(user, user.activeInvestment, deposits);
-  const elapsedSec = Math.max(1, nowSec - depositStartSec);
-
-  // Exact linear sequential gross yield: ratePerSec * elapsedSec
-  let grossProfit = ratePerSec * elapsedSec;
-
-  const directEarned = parseFloat(String(user.earnedYield || (user as any).baseEarnedYield || '0')) || 0;
-  if (directEarned > 0 && directEarned > grossProfit) {
-    grossProfit = directEarned;
-  }
-
-  // Net available profit after subtracting approved/pending withdrawals
-  const netProfit = Math.max(0, grossProfit - totalWithdrawn);
+  const directEarned = parseFloat(String(user.earnedYield || (user as any).dailyProfit || '0')) || 0;
+  const initialBase = Math.max(grossProfit, directEarned);
+  const netProfit = Math.max(0, initialBase - totalWithdrawn);
 
   return netProfit;
 }
 
-export function updateUserProfitAnchor(userKey: string, newProfit: number): void {
-  // No-op for backward compatibility
+export function updateUserProfitAnchor(userKey: string, newProfit: number, timestampSec: number = Math.floor(Date.now() / 1000)): void {
+  if (typeof window === 'undefined' || !userKey) return;
+  try {
+    const cleanKey = userKey.toLowerCase().trim();
+    const anchorData = JSON.stringify({ profit: newProfit, timestampSec });
+    localStorage.setItem(`dc_anchor_${cleanKey}`, anchorData);
+    localStorage.setItem('dc_anchor_user', anchorData);
+    localStorage.setItem(`dollarcraft_accumulated_profit_${cleanKey}`, newProfit.toFixed(18));
+  } catch (_) {}
 }
 

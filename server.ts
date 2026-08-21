@@ -1335,6 +1335,7 @@ function reconcileOfflineYields(): { totalOfflineYieldCredited: string; elapsedS
               principalBalance: Number(u.principalBalance),
               totalDeposit: Number((u as any).totalDeposit || u.principalBalance || 0),
               totalBalance: Number((u as any).totalBalance || 0),
+              totalWithdrawn: Number(u.totalWithdrawn || 0),
               depositStartTime: u.depositStartTime,
               baseEarnedYield: u.baseEarnedYield || '0.000000000000000000',
               lastYieldTick: new Date(now).toISOString()
@@ -2378,12 +2379,11 @@ app.get('/api/dashboard/state', async (req: Request, res: Response) => {
       } else {
         activeUser.principalBalance = totalEffectivePrincipalBN.toFixed(18);
         activeUser.totalWithdrawn = maxWithdrawnBN.toFixed(18);
-        const grossEarnedBN = new BigNumber(activeUser.earnedYield || '0');
-        const netEarnedBN = BigNumber.max(0, grossEarnedBN.minus(maxWithdrawnBN));
-        activeUser.earnedYield = netEarnedBN.toFixed(18);
-        activeUser.dailyProfit = netEarnedBN.toNumber();
+        const currentEarnedBN = new BigNumber(activeUser.earnedYield || (activeUser as any).dailyProfit || '0');
+        activeUser.earnedYield = currentEarnedBN.toFixed(18);
+        activeUser.dailyProfit = currentEarnedBN.toNumber();
         const pBalNum = totalEffectivePrincipalBN.toNumber();
-        const earnedNum = netEarnedBN.toNumber();
+        const earnedNum = currentEarnedBN.toNumber();
         (activeUser as any).totalDeposit = pBalNum;
         (activeUser as any).totalBalance = Math.max(0, pBalNum + earnedNum);
       }

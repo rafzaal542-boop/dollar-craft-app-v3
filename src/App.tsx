@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { User, UserDeposit, Transaction, ReferralReward, SystemMetrics, InvestmentPlan, ActiveInvestment } from './types';
-import { BigNumber, formatCurrency, formatPrecision, calculateMicroYield, calculateYieldPerSecond, calculateServerTimestampYield, getPlanRates, reconcileUserOfflineYield, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit } from './lib/yieldEngine';
+import { BigNumber, formatCurrency, formatPrecision, calculateMicroYield, calculateYieldPerSecond, calculateServerTimestampYield, getPlanRates, reconcileUserOfflineYield, resolveCanonicalDepositStartTime, computeLiveUserAccruedProfit, updateUserProfitAnchor } from './lib/yieldEngine';
 import { Header } from './components/Header';
 import { LiveBalanceTicker } from './components/LiveBalanceTicker';
 import { ActiveCyclesTable } from './components/ActiveCyclesTable';
@@ -316,8 +316,28 @@ export default function App() {
               : (prevUser.baseEarnedYield || '0.000000000000000000');
 
             const fsWithdrawn = d.totalWithdrawn !== undefined ? String(d.totalWithdrawn) : (prevUser.totalWithdrawn || '0');
+            let localWdNum = 0;
+            const uEmailClean = (d.email || prevUser.email || '').toLowerCase().trim();
+            const uIdClean = d.id || prevUser.id || '';
+            try {
+              localWdNum = Math.max(
+                parseFloat(localStorage.getItem(`dc_withdrawn_${uEmailClean}`) || '0'),
+                parseFloat(localStorage.getItem(`dc_withdrawn_${uIdClean}`) || '0'),
+                parseFloat(localStorage.getItem('dc_user_withdrawn') || '0')
+              );
+            } catch (_) {}
+            const effWithdrawnBN = BigNumber.max(
+              new BigNumber(fsWithdrawn || '0'),
+              new BigNumber(prevUser.totalWithdrawn || '0'),
+              new BigNumber(localWdNum)
+            );
+            const effWithdrawnStr = effWithdrawnBN.toFixed(18);
 
-            const calculatedLiveProfit = computeLiveUserAccruedProfit({ ...prevUser, ...d }, deposits, transactions);
+            const calculatedLiveProfit = computeLiveUserAccruedProfit(
+              { ...prevUser, ...d, totalWithdrawn: effWithdrawnStr },
+              deposits,
+              transactions
+            );
             const finalYieldBN = new BigNumber(calculatedLiveProfit);
             const fsYieldStr = finalYieldBN.toFixed(18);
             const computedTotalBal = Math.max(0, effectiveDepNum + finalYieldBN.toNumber());
@@ -401,7 +421,8 @@ export default function App() {
               totalBalance: totalBal,
               earnedYield: fsYieldStr,
               dailyProfit: computedDailyProfit,
-              totalWithdrawn: fsWithdrawn,
+              totalWithdrawn: effWithdrawnStr,
+              withdrawnTotal: effWithdrawnStr,
               ibWithdrawableCommission: d.ibWithdrawableCommission !== undefined ? String(d.ibWithdrawableCommission) : prevUser.ibWithdrawableCommission,
               ibTotalCommission: d.ibTotalCommission !== undefined ? String(d.ibTotalCommission) : prevUser.ibTotalCommission,
               is_ib: d.is_ib !== undefined ? !!d.is_ib : prevUser.is_ib,
@@ -689,7 +710,17 @@ export default function App() {
             const incomingBalBN = new BigNumber(data.user.principalBalance || '0');
             const incomingWithdrawnBN = new BigNumber(data.user.totalWithdrawn || '0');
             const prevWithdrawnBN = new BigNumber(prevUser?.totalWithdrawn || '0');
-            const maxWithdrawnBN = BigNumber.max(incomingWithdrawnBN, prevWithdrawnBN);
+            let localWdNum = 0;
+            const uEmailClean = (data.user.email || prevUser?.email || '').toLowerCase().trim();
+            const uIdClean = data.user.id || prevUser?.id || '';
+            try {
+              localWdNum = Math.max(
+                parseFloat(localStorage.getItem(`dc_withdrawn_${uEmailClean}`) || '0'),
+                parseFloat(localStorage.getItem(`dc_withdrawn_${uIdClean}`) || '0'),
+                parseFloat(localStorage.getItem('dc_user_withdrawn') || '0')
+              );
+            } catch (_) {}
+            const maxWithdrawnBN = BigNumber.max(incomingWithdrawnBN, prevWithdrawnBN, new BigNumber(localWdNum));
 
             const totalDepNum = Math.max(0, Number(data.user.totalDeposit || incomingBalBN.toNumber()));
 
@@ -699,20 +730,13 @@ export default function App() {
               data.deposits || deposits
             );
 
-            const monthlyRate = (data.user.activeInvestment?.monthlyYieldPercent) || (totalDepNum >= 1001 ? 35 : (totalDepNum >= 501 ? 30 : 25));
-            const yieldRes = calculateServerTimestampYield(
-              totalDepNum,
-              monthlyRate,
-              effDepositStart,
-              nowSec,
-              0,
-              maxWithdrawnBN
+            const calculatedLiveProfit = computeLiveUserAccruedProfit(
+              { ...(prevUser || {}), ...data.user, totalWithdrawn: maxWithdrawnBN.toFixed(18) },
+              data.deposits || deposits,
+              data.transactions || transactions
             );
 
-            const finalYieldBN = BigNumber.max(
-              0,
-              yieldRes.accumulatedProfit
-            );
+            const finalYieldBN = new BigNumber(calculatedLiveProfit);
             const finalYieldStr = finalYieldBN.toFixed(18);
             const totalBalNum = Math.max(0, totalDepNum + finalYieldBN.toNumber());
 
@@ -1065,15 +1089,19 @@ export default function App() {
     // 3. Save updated user state and transaction to LocalStorage immediately
     try {
       localStorage.setItem('dollarcraft_active_user', JSON.stringify(updatedUser));
-      if (user.email) {
-        const uEmail = user.email.toLowerCase().trim();
+      const uEmail = (user.email || '').toLowerCase().trim();
+      const uId = (user.id || '').trim();
+      if (uEmail) {
+        updateUserProfitAnchor(uEmail, newNetProfit, nowSec);
         localStorage.setItem(`dc_withdrawn_${uEmail}`, newWithdrawnNum.toString());
         localStorage.setItem('dc_user_withdrawn', newWithdrawnNum.toString());
         localStorage.setItem(`dollarcraft_accumulated_profit_${uEmail}`, newYieldStr);
       }
-      if (user.id) {
-        localStorage.setItem(`dollarcraft_accumulated_profit_${user.id}`, newYieldStr);
+      if (uId) {
+        updateUserProfitAnchor(uId, newNetProfit, nowSec);
+        localStorage.setItem(`dollarcraft_accumulated_profit_${uId}`, newYieldStr);
       }
+      updateUserProfitAnchor('user', newNetProfit, nowSec);
 
       const userKeys = ['dollar_craft_users', 'dollar_craft_registered_users', 'dc_registered_users', 'registered_users'];
       userKeys.forEach((key) => {
